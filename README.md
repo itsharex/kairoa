@@ -19,7 +19,7 @@
 </div>
 
 <p align="center">
-  ![Main Window](screenshots/kairoa_en.png)
+  <img src="screenshots/kairoa_en.png" alt="Main Window" style="max-width: 100%; height: auto;" />
 </p>
 
 ## Features

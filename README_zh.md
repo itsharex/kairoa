@@ -19,7 +19,7 @@
 </div>
 
 <p align="center">
-  ![Main Window](screenshots/kairoa_zh.png)
+  <img src="screenshots/kairoa_zh.png" alt="主页" style="max-width: 100%; height: auto;" />
 </p>
 
 ## 功能特性
