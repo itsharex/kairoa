@@ -20,6 +20,7 @@ const translations = {
       color: 'Color Converter',
       baseConverter: 'Base Converter',
       rsa: 'RSA Key Pair Generator',
+      jwt: 'JWT Decoder',
       apiClient: 'REST API Client',
       settings: 'Settings'
     },
@@ -227,6 +228,20 @@ const translations = {
       warning: 'Warning:',
       warningDescription: 'Keep your private key secure and never share it with anyone. The private key is sensitive information that should be protected.'
     },
+    jwt: {
+      title: 'JWT Decoder',
+      subtitle: 'Decode and inspect JWT (JSON Web Token) tokens',
+      input: 'JWT Token',
+      placeholder: 'Paste your JWT token here (e.g., eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...)',
+      decode: 'Decode',
+      header: 'Header',
+      payload: 'Payload',
+      signature: 'Signature',
+      noHeader: 'No header',
+      noPayload: 'No payload',
+      noSignature: 'No signature',
+      signatureHint: 'Note: The signature is a cryptographic hash and cannot be decoded. It is used to verify the token integrity.'
+    },
     apiClient: {
       urlPlaceholder: 'Enter API URL...',
       urlRequired: 'URL is required',
@@ -287,6 +302,7 @@ const translations = {
       color: '颜色转换',
       baseConverter: '进制转换',
       rsa: 'RSA 密钥对生成器',
+      jwt: 'JWT 解码器',
       apiClient: 'REST API 客户端',
       settings: '设置'
     },
@@ -493,6 +509,20 @@ const translations = {
       privateKey: '私钥',
       warning: '警告：',
       warningDescription: '请妥善保管您的私钥，不要与任何人分享。私钥是敏感信息，应该受到保护。'
+    },
+    jwt: {
+      title: 'JWT 解码器',
+      subtitle: '解码和检查 JWT (JSON Web Token) 令牌',
+      input: 'JWT 令牌',
+      placeholder: '在此处粘贴您的 JWT 令牌（例如：eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...）',
+      decode: '解码',
+      header: '头部',
+      payload: '载荷',
+      signature: '签名',
+      noHeader: '无头部',
+      noPayload: '无载荷',
+      noSignature: '无签名',
+      signatureHint: '注意：签名是加密哈希值，无法解码。它用于验证令牌的完整性。'
     },
     apiClient: {
       urlPlaceholder: '输入 API URL...',
