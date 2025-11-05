@@ -180,6 +180,8 @@
   let generatedCurlCommand = $state('');
   let curlCopied = $state(false);
   let showDropdown = $state(false);
+  let requestView = $state<'headers' | 'body'>('headers');
+  let showResponseDialog = $state(false);
 
   function parseBulkHeaders(text: string): Header[] {
     const headers: Header[] = [];
@@ -479,6 +481,9 @@
 
           // 更新标签页名称
           updateTabName(tab);
+          
+          // 显示响应对话框
+          showResponseDialog = true;
         }
       } else {
         // 回退到使用 fetch（可能在浏览器中运行或 Tauri API 不可用）
@@ -523,10 +528,15 @@
 
         // 更新标签页名称
         updateTabName(tab);
+        
+        // 显示响应对话框
+        showResponseDialog = true;
       }
     } catch (err) {
       tab.error = err instanceof Error ? err.message : t('apiClient.requestFailed');
       tab.responseTime = Date.now() - startTime;
+      // 如果出错，也显示对话框显示错误信息
+      showResponseDialog = true;
     } finally {
       tab.isSending = false;
     }
@@ -995,6 +1005,10 @@
       if (currentTab.bodyType !== 'none') {
         currentTab.bodyType = 'none';
       }
+      // 如果当前在 body 标签，自动切换到 headers 标签
+      if (requestView === 'body') {
+        requestView = 'headers';
+      }
       // 清理 formData 中的文件引用
       const hasFiles = currentTab.formData.some(item => item.file);
       if (hasFiles) {
@@ -1206,57 +1220,265 @@
         </div>
       </div>
 
-      <!-- Headers -->
+      <!-- Headers and Body Tabs -->
       <div>
-        <div class="flex items-center justify-between mb-2">
-          <div class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-            {t('apiClient.headers')}
-          </div>
+        <!-- Tab Navigation -->
+        <div class="flex items-center border-b border-gray-200 dark:border-gray-700 mb-4">
           <button
-            onclick={() => { bulkHeaderText = ''; showBulkHeaderDialog = true; }}
-            class="btn-secondary text-sm"
+            onclick={() => requestView = 'headers'}
+            class="px-4 py-2 border-b-2 transition-colors {requestView === 'headers'
+              ? 'border-primary-600 dark:border-primary-400 text-primary-600 dark:text-primary-400'
+              : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'}"
           >
-            {t('apiClient.bulkAdd')}
+            <span class="text-sm font-medium">{t('apiClient.headers')}</span>
           </button>
+          {#if activeTab.method !== 'GET' && activeTab.method !== 'HEAD' && activeTab.method !== 'OPTIONS'}
+            <button
+              onclick={() => requestView = 'body'}
+              class="px-4 py-2 border-b-2 transition-colors {requestView === 'body'
+                ? 'border-primary-600 dark:border-primary-400 text-primary-600 dark:text-primary-400'
+                : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'}"
+            >
+              <span class="text-sm font-medium">{t('apiClient.body')}</span>
+            </button>
+          {/if}
         </div>
-        <div class="space-y-2">
-          {#each activeTab.headers as header, index}
-            <div class="flex gap-2 items-center">
-              <input
-                type="checkbox"
-                bind:checked={header.enabled}
-                class="w-4 h-4 text-primary-600 bg-gray-100 border-gray-300 rounded focus:ring-primary-500 dark:focus:ring-primary-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-              />
-              <input
-                type="text"
-                bind:value={header.key}
-                placeholder={t('apiClient.headerKey')}
-                class="input flex-1"
-                disabled={!header.enabled}
-              />
-              <input
-                type="text"
-                bind:value={header.value}
-                placeholder={t('apiClient.headerValue')}
-                class="input flex-1"
-                disabled={!header.enabled}
-              />
+
+        <!-- Tab Content -->
+        {#if requestView === 'headers'}
+          <!-- Headers Content -->
+          <div>
+            <div class="flex items-center justify-between mb-3">
               <button
-                onclick={() => removeHeader(activeTab, index)}
-                class="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                disabled={activeTab.headers.length === 1}
+                onclick={() => { bulkHeaderText = ''; showBulkHeaderDialog = true; }}
+                class="btn-secondary text-sm"
               >
-                <Trash2 class="w-4 h-4" />
+                {t('apiClient.bulkAdd')}
+              </button>
+              <button
+                onclick={() => addHeader(activeTab)}
+                class="btn-secondary text-sm"
+              >
+                {t('apiClient.addHeader')}
               </button>
             </div>
-          {/each}
-          <button
-            onclick={() => addHeader(activeTab)}
-            class="btn-secondary text-sm"
-          >
-            {t('apiClient.addHeader')}
-          </button>
-        </div>
+            <div class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800">
+              <div class="divide-y divide-gray-200 dark:divide-gray-700">
+                {#each activeTab.headers as header, index}
+                  <div class="group relative flex items-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                    <!-- Checkbox (minimal, left side) -->
+                    <div class="px-2 py-1 flex items-center opacity-60 group-hover:opacity-100 transition-opacity">
+                      <input
+                        type="checkbox"
+                        bind:checked={header.enabled}
+                        class="w-3.5 h-3.5 text-primary-600 bg-gray-100 border-gray-300 rounded focus:ring-primary-500 dark:focus:ring-primary-600 dark:ring-offset-gray-800 focus:ring-1 dark:bg-gray-700 dark:border-gray-600 cursor-pointer"
+                        title={header.enabled ? '禁用' : '启用'}
+                      />
+                    </div>
+                    <!-- Key Column -->
+                    <div class="flex-1 px-3 py-1 border-r border-gray-200 dark:border-gray-700 min-w-[200px]">
+                      <input
+                        type="text"
+                        bind:value={header.key}
+                        placeholder={t('apiClient.headerKey')}
+                        class="w-full px-0 py-0 text-sm bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:ring-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!header.enabled}
+                        style="text-transform: lowercase;"
+                        oninput={(e) => header.key = (e.target as HTMLInputElement).value.toLowerCase()}
+                      />
+                    </div>
+                    <!-- Value Column -->
+                    <div class="flex-1 px-3 py-1 flex items-center gap-2">
+                      <input
+                        type="text"
+                        bind:value={header.value}
+                        placeholder={t('apiClient.headerValue')}
+                        class="flex-1 px-0 py-0 text-sm bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:ring-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!header.enabled}
+                      />
+                      <!-- Delete button (show on hover) -->
+                      <button
+                        onclick={() => removeHeader(activeTab, index)}
+                        class="opacity-0 group-hover:opacity-100 p-0.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                        disabled={activeTab.headers.length === 1}
+                        title="删除"
+                      >
+                        <Trash2 class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          </div>
+        {:else if requestView === 'body'}
+          <!-- Body Content -->
+          <div>
+            <div class="flex gap-2 mb-4">
+              <button
+                onclick={() => activeTab.bodyType = 'none'}
+                class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'none' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
+              >
+                None
+              </button>
+              <button
+                onclick={() => activeTab.bodyType = 'json'}
+                class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'json' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
+              >
+                JSON
+              </button>
+              <button
+                onclick={() => activeTab.bodyType = 'text'}
+                class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'text' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
+              >
+                Text
+              </button>
+              <button
+                onclick={() => activeTab.bodyType = 'xml'}
+                class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'xml' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
+              >
+                XML
+              </button>
+              <button
+                onclick={() => activeTab.bodyType = 'form-data'}
+                class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'form-data' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
+              >
+                Form Data
+              </button>
+              <button
+                onclick={() => activeTab.bodyType = 'url-encoded'}
+                class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'url-encoded' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
+              >
+                URL Encoded
+              </button>
+            </div>
+
+            {#if activeTab.bodyType === 'json'}
+              <textarea
+                bind:value={activeTab.bodyJson}
+                placeholder={t('apiClient.jsonPlaceholder')}
+                class="textarea font-mono text-sm min-h-[150px]"
+              ></textarea>
+            {:else if activeTab.bodyType === 'text'}
+              <textarea
+                bind:value={activeTab.bodyText}
+                placeholder={t('apiClient.textPlaceholder')}
+                class="textarea font-mono text-sm min-h-[150px]"
+              ></textarea>
+            {:else if activeTab.bodyType === 'xml'}
+              <textarea
+                bind:value={activeTab.bodyXml}
+                placeholder={t('apiClient.xmlPlaceholder')}
+                class="textarea font-mono text-sm min-h-[150px]"
+              ></textarea>
+            {:else if activeTab.bodyType === 'form-data' || activeTab.bodyType === 'url-encoded'}
+              <div>
+                <div class="flex items-center justify-end mb-3">
+                  <button
+                    onclick={() => addFormDataItem(activeTab)}
+                    class="btn-secondary text-sm"
+                  >
+                    {t('apiClient.addFormData')}
+                  </button>
+                </div>
+                <div class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800">
+                  <div class="divide-y divide-gray-200 dark:divide-gray-700">
+                    {#each activeTab.formData as item, index}
+                      <div class="group relative flex items-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                        <!-- Checkbox -->
+                        <div class="px-2 py-1 flex items-center opacity-60 group-hover:opacity-100 transition-opacity">
+                          <input
+                            type="checkbox"
+                            bind:checked={item.enabled}
+                            class="w-3.5 h-3.5 text-primary-600 bg-gray-100 border-gray-300 rounded focus:ring-primary-500 dark:focus:ring-primary-600 dark:ring-offset-gray-800 focus:ring-1 dark:bg-gray-700 dark:border-gray-600 cursor-pointer"
+                            title={item.enabled ? '禁用' : '启用'}
+                          />
+                        </div>
+                        <!-- Key Column -->
+                        <div class="flex-1 px-3 py-1 border-r border-gray-200 dark:border-gray-700 min-w-[200px]">
+                          <input
+                            type="text"
+                            bind:value={item.key}
+                            placeholder={t('apiClient.formKey')}
+                            class="w-full px-0 py-0 text-sm bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:ring-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={!item.enabled}
+                          />
+                        </div>
+                        <!-- Type Column (only for form-data) -->
+                        {#if activeTab.bodyType === 'form-data'}
+                          <div class="px-2 py-1 border-r border-gray-200 dark:border-gray-700 w-24">
+                            <div class="relative">
+                              <select
+                                bind:value={item.type}
+                                class="w-full px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-400 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer appearance-none pr-6 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                                disabled={!item.enabled}
+                                onchange={() => {
+                                  if (item.type === 'text') {
+                                    item.file = null;
+                                    item.value = '';
+                                  } else {
+                                    item.value = '';
+                                  }
+                                }}
+                              >
+                                <option value="text">Text</option>
+                                <option value="file">File</option>
+                              </select>
+                              <!-- Custom dropdown arrow -->
+                              <div class="absolute inset-y-0 right-1 flex items-center pointer-events-none">
+                                <svg class="w-3 h-3 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                              </div>
+                            </div>
+                          </div>
+                        {/if}
+                        <!-- Value Column -->
+                        <div class="flex-1 px-3 py-1 flex items-center gap-2">
+                          {#if item.type === 'text' || activeTab.bodyType === 'url-encoded'}
+                            <input
+                              type="text"
+                              bind:value={item.value}
+                              placeholder={t('apiClient.formValue')}
+                              class="flex-1 px-0 py-0 text-sm bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:ring-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                              disabled={!item.enabled}
+                            />
+                          {:else if item.type === 'file'}
+                            <label class="flex-1 cursor-pointer flex items-center gap-2 {!item.enabled ? 'opacity-50 cursor-not-allowed' : ''}">
+                              <input
+                                type="file"
+                                class="hidden"
+                                disabled={!item.enabled}
+                                onchange={(e) => handleFileSelect(activeTab, index, e)}
+                              />
+                              <span class="flex-1 text-sm text-gray-700 dark:text-gray-300 px-0 py-0">
+                                {item.value || t('apiClient.selectFile')}
+                              </span>
+                              {#if item.file}
+                                <span class="text-xs text-gray-500 dark:text-gray-400">
+                                  ({(item.file.size / 1024).toFixed(2)} KB)
+                                </span>
+                              {/if}
+                            </label>
+                          {/if}
+                          <!-- Delete button (show on hover) -->
+                          <button
+                            onclick={() => removeFormDataItem(activeTab, index)}
+                            class="opacity-0 group-hover:opacity-100 p-0.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                            disabled={activeTab.formData.length === 1}
+                            title="删除"
+                          >
+                            <Trash2 class="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       <!-- 批量添加 Header 对话框 -->
@@ -1304,149 +1526,6 @@
         </div>
       {/if}
 
-      <!-- Body -->
-      {#if activeTab.method !== 'GET' && activeTab.method !== 'HEAD' && activeTab.method !== 'OPTIONS'}
-        <div>
-          <div class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
-            {t('apiClient.body')}
-          </div>
-          <div class="flex gap-2 mb-2">
-            <button
-              onclick={() => activeTab.bodyType = 'none'}
-              class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'none' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
-            >
-              None
-            </button>
-            <button
-              onclick={() => activeTab.bodyType = 'json'}
-              class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'json' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
-            >
-              JSON
-            </button>
-            <button
-              onclick={() => activeTab.bodyType = 'text'}
-              class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'text' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
-            >
-              Text
-            </button>
-            <button
-              onclick={() => activeTab.bodyType = 'xml'}
-              class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'xml' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
-            >
-              XML
-            </button>
-            <button
-              onclick={() => activeTab.bodyType = 'form-data'}
-              class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'form-data' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
-            >
-              Form Data
-            </button>
-            <button
-              onclick={() => activeTab.bodyType = 'url-encoded'}
-              class="px-3 py-1 text-sm rounded transition-colors {activeTab.bodyType === 'url-encoded' ? 'bg-gray-300 dark:bg-gray-600 text-gray-900 dark:text-gray-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
-            >
-              URL Encoded
-            </button>
-          </div>
-
-          {#if activeTab.bodyType === 'json'}
-            <textarea
-              bind:value={activeTab.bodyJson}
-              placeholder={t('apiClient.jsonPlaceholder')}
-              class="textarea font-mono text-sm min-h-[150px]"
-            ></textarea>
-          {:else if activeTab.bodyType === 'text'}
-            <textarea
-              bind:value={activeTab.bodyText}
-              placeholder={t('apiClient.textPlaceholder')}
-              class="textarea font-mono text-sm min-h-[150px]"
-            ></textarea>
-          {:else if activeTab.bodyType === 'xml'}
-            <textarea
-              bind:value={activeTab.bodyXml}
-              placeholder={t('apiClient.xmlPlaceholder')}
-              class="textarea font-mono text-sm min-h-[150px]"
-            ></textarea>
-          {:else if activeTab.bodyType === 'form-data' || activeTab.bodyType === 'url-encoded'}
-            <div class="space-y-2">
-              {#each activeTab.formData as item, index}
-                <div class="flex gap-2 items-center">
-                  <input
-                    type="checkbox"
-                    bind:checked={item.enabled}
-                    class="w-4 h-4 text-primary-600 bg-gray-100 border-gray-300 rounded focus:ring-primary-500 dark:focus:ring-primary-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-                  />
-                  <input
-                    type="text"
-                    bind:value={item.key}
-                    placeholder={t('apiClient.formKey')}
-                    class="input flex-1"
-                    disabled={!item.enabled}
-                  />
-                  {#if activeTab.bodyType === 'form-data'}
-                    <select
-                      bind:value={item.type}
-                      class="input w-24"
-                      disabled={!item.enabled}
-                      onchange={() => {
-                        if (item.type === 'text') {
-                          item.file = null;
-                          item.value = '';
-                        } else {
-                          item.value = '';
-                        }
-                      }}
-                    >
-                      <option value="text">Text</option>
-                      <option value="file">File</option>
-                    </select>
-                  {/if}
-                  {#if item.type === 'text' || activeTab.bodyType === 'url-encoded'}
-                    <input
-                      type="text"
-                      bind:value={item.value}
-                      placeholder={t('apiClient.formValue')}
-                      class="input flex-1"
-                      disabled={!item.enabled}
-                    />
-                  {:else if item.type === 'file'}
-                    <label class="input flex-1 cursor-pointer flex items-center gap-2 {!item.enabled ? 'opacity-50 cursor-not-allowed' : ''}">
-                      <input
-                        type="file"
-                        class="hidden"
-                        disabled={!item.enabled}
-                        onchange={(e) => handleFileSelect(activeTab, index, e)}
-                      />
-                      <span class="flex-1 text-gray-700 dark:text-gray-300">
-                        {item.value || t('apiClient.selectFile')}
-                      </span>
-                      {#if item.file}
-                        <span class="text-xs text-gray-500 dark:text-gray-400">
-                          ({(item.file.size / 1024).toFixed(2)} KB)
-                        </span>
-                      {/if}
-                    </label>
-                  {/if}
-                  <button
-                    onclick={() => removeFormDataItem(activeTab, index)}
-                    class="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                    disabled={activeTab.formData.length === 1}
-                  >
-                    <Trash2 class="w-4 h-4" />
-                  </button>
-                </div>
-              {/each}
-              <button
-                onclick={() => addFormDataItem(activeTab)}
-                class="btn-secondary text-sm"
-              >
-                {t('apiClient.addFormData')}
-              </button>
-            </div>
-          {/if}
-        </div>
-      {/if}
-
       {#if activeTab.error}
         <div class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
           <p class="text-sm text-red-800 dark:text-red-200">{activeTab.error}</p>
@@ -1455,94 +1534,128 @@
     </div>
   </div>
 
-  <!-- 响应卡片 -->
-  {#if activeTab.responseStatus !== null || activeTab.responseBody}
-    <div class="card">
-      <div class="space-y-4">
-        <div class="flex items-center justify-between">
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            {t('apiClient.response')}
-          </h3>
-          {#if activeTab.responseTime !== null}
-            <span class="text-sm text-gray-500 dark:text-gray-400">
-              {activeTab.responseTime}ms
-            </span>
-          {/if}
-        </div>
-
-        {#if activeTab.responseStatus !== null}
-          <div>
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-              {t('apiClient.status')}:
-            </span>
-            <span class="ml-2 font-semibold {getStatusColor(activeTab.responseStatus)}">
-              {activeTab.responseStatus}
-            </span>
-          </div>
-        {/if}
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <!-- 响应头 -->
-          <div class="flex flex-col">
-            <div class="flex items-center justify-between mb-2 h-[2.5rem]">
-              <div class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {t('apiClient.responseHeaders')}
-              </div>
-              <div class="w-0"></div>
-            </div>
-            <div class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 h-[calc(100vh-400px)] min-h-[300px] overflow-y-auto {Object.keys(activeTab.responseHeaders).length === 0 ? 'flex items-center justify-center' : ''}">
-              {#if Object.keys(activeTab.responseHeaders).length > 0}
-                {#each Object.entries(activeTab.responseHeaders) as [key, value]}
-                  <div class="text-sm font-mono py-1">
-                    <span class="text-gray-600 dark:text-gray-400">{key}:</span>
-                    <span class="ml-2 text-gray-900 dark:text-gray-100">{value}</span>
-                  </div>
-                {/each}
-              {:else}
-                <span class="text-sm text-gray-400 dark:text-gray-500">{t('apiClient.noHeaders')}</span>
-              {/if}
-            </div>
-          </div>
-
-          <!-- 响应体 -->
-          <div class="flex flex-col">
-            <div class="flex items-center justify-between mb-2 h-[2.5rem]">
-              <div class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                {t('apiClient.responseBody')}
-              </div>
-              {#if activeTab.responseBody}
-                <button
-                  onclick={() => copyResponse(activeTab)}
-                  class="btn-secondary whitespace-nowrap transition-all duration-200 {activeTab.copied ? 'bg-green-500 hover:bg-green-600 text-white' : ''}"
-                >
-                  {#if activeTab.copied}
-                    <span class="flex items-center gap-1">
-                      <Check class="w-4 h-4" />
-                      {t('common.copied')}
-                    </span>
-                  {:else}
-                    <span class="flex items-center gap-1">
-                      <Copy class="w-4 h-4" />
-                      {t('common.copy')}
-                    </span>
-                  {/if}
-                </button>
-              {:else}
-                <div class="w-0"></div>
-              {/if}
-            </div>
-            {#if activeTab.responseBody}
-              <textarea
-                value={activeTab.responseBody}
-                readonly
-                class="textarea font-mono text-sm h-[calc(100vh-400px)] min-h-[300px] resize-none {activeTab.copied ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700' : ''} transition-colors duration-300"
-              ></textarea>
-            {:else}
-              <div class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 h-[calc(100vh-400px)] min-h-[300px] overflow-y-auto flex items-center justify-center">
-                <span class="text-sm text-gray-400 dark:text-gray-500">{t('apiClient.noResponseBody')}</span>
-              </div>
+  <!-- 响应对话框 -->
+  {#if showResponseDialog && (activeTab.responseStatus !== null || activeTab.responseBody || activeTab.error)}
+    <div 
+      class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+      onclick={() => { showResponseDialog = false; }}
+      onkeydown={(e) => { if (e.key === 'Escape') { showResponseDialog = false; } }}
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+    >
+      <div 
+        class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-6xl mx-4 max-h-[90vh] flex flex-col"
+        onclick={(e) => e.stopPropagation()}
+        role="none"
+      >
+        <!-- 对话框头部 -->
+        <div class="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+          <div class="flex items-center gap-4">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              {t('apiClient.response')}
+            </h3>
+            {#if activeTab.responseStatus !== null}
+              <span class="px-2 py-1 text-sm font-semibold rounded {getStatusColor(activeTab.responseStatus)}">
+                {activeTab.responseStatus}
+              </span>
+            {/if}
+            {#if activeTab.responseTime !== null}
+              <span class="text-sm text-gray-500 dark:text-gray-400">
+                {activeTab.responseTime}ms
+              </span>
             {/if}
           </div>
+          <button
+            onclick={() => { showResponseDialog = false; }}
+            class="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded transition-colors"
+            title="关闭"
+          >
+            <X class="w-5 h-5" />
+          </button>
+        </div>
+
+        <!-- 对话框内容 -->
+        <div class="flex-1 overflow-y-auto p-6">
+          {#if activeTab.error}
+            <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <p class="text-sm text-red-800 dark:text-red-200">{activeTab.error}</p>
+            </div>
+          {/if}
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- 响应头 -->
+            <div class="flex flex-col">
+              <div class="flex items-center justify-between mb-2 h-[2.5rem]">
+                <div class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t('apiClient.responseHeaders')}
+                </div>
+                <div class="w-0"></div>
+              </div>
+              <div class="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-3 h-[400px] overflow-y-auto {Object.keys(activeTab.responseHeaders).length === 0 ? 'flex items-center justify-center' : ''}">
+                {#if Object.keys(activeTab.responseHeaders).length > 0}
+                  {#each Object.entries(activeTab.responseHeaders) as [key, value]}
+                    <div class="text-sm font-mono py-1">
+                      <span class="text-gray-600 dark:text-gray-400">{key}:</span>
+                      <span class="ml-2 text-gray-900 dark:text-gray-100">{value}</span>
+                    </div>
+                  {/each}
+                {:else}
+                  <span class="text-sm text-gray-400 dark:text-gray-500">{t('apiClient.noHeaders')}</span>
+                {/if}
+              </div>
+            </div>
+
+            <!-- 响应体 -->
+            <div class="flex flex-col">
+              <div class="flex items-center justify-between mb-2 h-[2.5rem]">
+                <div class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t('apiClient.responseBody')}
+                </div>
+                {#if activeTab.responseBody}
+                  <button
+                    onclick={() => copyResponse(activeTab)}
+                    class="btn-secondary whitespace-nowrap transition-all duration-200 {activeTab.copied ? 'bg-green-500 hover:bg-green-600 text-white' : ''}"
+                  >
+                    {#if activeTab.copied}
+                      <span class="flex items-center gap-1">
+                        <Check class="w-4 h-4" />
+                        {t('common.copied')}
+                      </span>
+                    {:else}
+                      <span class="flex items-center gap-1">
+                        <Copy class="w-4 h-4" />
+                        {t('common.copy')}
+                      </span>
+                    {/if}
+                  </button>
+                {:else}
+                  <div class="w-0"></div>
+                {/if}
+              </div>
+              {#if activeTab.responseBody}
+                <textarea
+                  value={activeTab.responseBody}
+                  readonly
+                  class="textarea font-mono text-sm h-[400px] resize-none overflow-y-auto {activeTab.copied ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700' : ''} transition-colors duration-300"
+                ></textarea>
+              {:else}
+                <div class="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-3 h-[400px] overflow-y-auto flex items-center justify-center">
+                  <span class="text-sm text-gray-400 dark:text-gray-500">{t('apiClient.noResponseBody')}</span>
+                </div>
+              {/if}
+            </div>
+          </div>
+        </div>
+
+        <!-- 对话框底部 -->
+        <div class="flex items-center justify-end gap-2 p-6 border-t border-gray-200 dark:border-gray-700">
+          <button
+            onclick={() => { showResponseDialog = false; }}
+            class="btn-secondary"
+          >
+            {t('apiClient.close')}
+          </button>
         </div>
       </div>
     </div>
