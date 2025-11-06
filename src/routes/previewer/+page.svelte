@@ -1,15 +1,26 @@
 <script lang="ts">
   import { translationsStore } from '$lib/stores/i18n';
-  import { Copy, Check, Trash2, FileImage, FileText } from 'lucide-svelte';
+  import { Copy, Check, Trash2, FileImage, FileText, GitBranch, Download } from 'lucide-svelte';
   import { marked, type RendererObject } from 'marked';
+  import mermaid from 'mermaid';
+  import { onMount } from 'svelte';
+  import html2canvas from 'html2canvas';
+  import { browser } from '$app/environment';
+  
+  // 动态导入 Tauri 插件（仅在需要时加载）
+  let dialogModule: typeof import('@tauri-apps/plugin-dialog') | null = null;
+  let fsModule: typeof import('@tauri-apps/plugin-fs') | null = null;
 
-  let activeView = $state<'svg' | 'markdown'>('svg');
+  let activeView = $state<'svg' | 'markdown' | 'mermaid'>('svg');
   let svgContent = $state('');
   let markdownContent = $state('');
-  let copied = $state<{ svg: boolean; markdown: boolean; preview: boolean }>({ svg: false, markdown: false, preview: false });
-  let previewElement: HTMLDivElement | null = null;
-  let svgFileInput: HTMLInputElement | null = null;
-  let markdownFileInput: HTMLInputElement | null = null;
+  let mermaidContent = $state('');
+  let copied = $state<{ svg: boolean; markdown: boolean; preview: boolean; mermaid: boolean }>({ svg: false, markdown: false, preview: false, mermaid: false });
+  let previewElement = $state<HTMLDivElement | null>(null);
+  let svgFileInput = $state<HTMLInputElement | null>(null);
+  let markdownFileInput = $state<HTMLInputElement | null>(null);
+  let mermaidFileInput = $state<HTMLInputElement | null>(null);
+  let mermaidContainer = $state<HTMLDivElement | null>(null);
 
   let translations = $derived($translationsStore);
 
@@ -49,13 +60,21 @@
       if (svgFileInput) {
         svgFileInput.value = '';
       }
-    } else {
+    } else if (activeView === 'markdown') {
       markdownContent = '';
       if (markdownFileInput) {
         markdownFileInput.value = '';
       }
+    } else if (activeView === 'mermaid') {
+      mermaidContent = '';
+      if (mermaidFileInput) {
+        mermaidFileInput.value = '';
+      }
+      if (mermaidContainer) {
+        mermaidContainer.innerHTML = '';
+      }
     }
-    copied = { svg: false, markdown: false, preview: false };
+    copied = { svg: false, markdown: false, preview: false, mermaid: false };
   }
 
   async function handleSvgFileSelect(event: Event) {
@@ -124,6 +143,211 @@
     }
   }
 
+  async function handleMermaidFileSelect(event: Event) {
+    const target = event.target as HTMLInputElement;
+    const file = target.files?.[0];
+    if (!file) return;
+
+    // 检查文件大小（限制为 10MB）
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      alert(`File size exceeds 10MB limit. Please select a smaller file.`);
+      target.value = '';
+      return;
+    }
+
+    // 检查文件类型
+    const validExtensions = ['.mmd', '.mermaid', '.md', '.txt'];
+    const fileName = file.name.toLowerCase();
+    const isValidType = validExtensions.some(ext => fileName.endsWith(ext)) || 
+                        file.type === 'text/plain';
+    
+    if (!isValidType) {
+      alert('Please select a Mermaid file (.mmd, .mermaid, .md, or .txt).');
+      target.value = '';
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      mermaidContent = text;
+      await renderMermaid();
+    } catch (error) {
+      console.error('Failed to read file:', error);
+      alert('Failed to read file. Please try again.');
+      target.value = '';
+    }
+  }
+
+  async function renderMermaid() {
+    if (!mermaidContainer || !mermaidContent.trim()) {
+      return;
+    }
+
+    try {
+      // 清空容器
+      mermaidContainer.innerHTML = '';
+      
+      // 生成唯一 ID
+      const id = `mermaid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // 创建临时元素用于渲染
+      const tempDiv = document.createElement('div');
+      tempDiv.className = 'mermaid';
+      tempDiv.id = id;
+      tempDiv.textContent = mermaidContent;
+      mermaidContainer.appendChild(tempDiv);
+      
+      // 使用 mermaid.run() 渲染图表（mermaid 11.x API）
+      await mermaid.run({
+        nodes: [tempDiv]
+      });
+    } catch (error) {
+      console.error('Mermaid rendering error:', error);
+      if (mermaidContainer) {
+        mermaidContainer.innerHTML = `<div class="text-center text-red-600 dark:text-red-400 p-4">
+          <p class="text-sm">Error rendering Mermaid diagram</p>
+          <p class="text-xs mt-2">${error instanceof Error ? error.message : 'Unknown error'}</p>
+        </div>`;
+      }
+    }
+  }
+
+  // 监听 mermaidContent 变化并重新渲染
+  $effect(() => {
+    if (activeView === 'mermaid' && mermaidContent.trim()) {
+      renderMermaid();
+    }
+  });
+
+  // 导出预览结果为图片
+  async function exportPreviewAsImage() {
+    let elementToExport: HTMLElement | null = null;
+    let filename = 'preview';
+
+    if (activeView === 'svg') {
+      // SVG 预览：查找预览容器中的 SVG 元素
+      const previewCard = document.querySelector('[data-preview="svg"]');
+      if (previewCard) {
+        const svgContainer = previewCard.querySelector('.border') as HTMLElement;
+        if (svgContainer && svgContainer.querySelector('svg')) {
+          elementToExport = svgContainer;
+          filename = 'svg-preview';
+        }
+      }
+    } else if (activeView === 'mermaid') {
+      // Mermaid 预览：导出 Mermaid 容器
+      if (mermaidContainer && mermaidContainer.querySelector('.mermaid')) {
+        elementToExport = mermaidContainer;
+        filename = 'mermaid-preview';
+      }
+    }
+
+    if (!elementToExport) {
+      alert('No preview content to export.');
+      return;
+    }
+
+    try {
+      // 使用 html2canvas 将元素转换为 canvas
+      const canvas = await html2canvas(elementToExport, {
+        backgroundColor: '#ffffff', // 白色背景
+        scale: 2, // 提高分辨率
+        useCORS: true,
+        logging: false,
+        allowTaint: true
+      });
+
+      // 检查是否在 Tauri 环境中
+      const isTauri = browser && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+      if (isTauri) {
+        // Tauri 环境：使用 dialog 和 fs API
+        try {
+          // 确保模块已加载
+          if (!dialogModule) {
+            dialogModule = await import('@tauri-apps/plugin-dialog');
+          }
+          if (!fsModule) {
+            fsModule = await import('@tauri-apps/plugin-fs');
+          }
+
+          if (!dialogModule || !fsModule) {
+            throw new Error('Failed to load Tauri plugins');
+          }
+
+          // 打开保存对话框
+          const filePath = await dialogModule.save({
+            defaultPath: `${filename}-${Date.now()}.png`,
+            filters: [{
+              name: 'PNG Image',
+              extensions: ['png']
+            }]
+          });
+
+          if (filePath) {
+            // 将 canvas 转换为 blob，然后转换为 Uint8Array
+            canvas.toBlob(async (blob) => {
+              if (!blob) {
+                alert('Failed to generate image.');
+                return;
+              }
+
+              const arrayBuffer = await blob.arrayBuffer();
+              const uint8Array = new Uint8Array(arrayBuffer);
+
+              // 写入文件
+              await fsModule.writeBinaryFile(filePath, uint8Array);
+            }, 'image/png');
+          }
+        } catch (error) {
+          console.error('Tauri export error:', error);
+          alert('Failed to export image. Please try again.');
+        }
+      } else {
+        // 浏览器环境：使用下载链接
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            alert('Failed to generate image.');
+            return;
+          }
+
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `${filename}-${Date.now()}.png`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 'image/png');
+      }
+    } catch (error) {
+      console.error('Export error:', error);
+      alert('Failed to export image. Please try again.');
+    }
+  }
+
+  // 初始化 Mermaid 和预加载 Tauri 插件
+  onMount(() => {
+    mermaid.initialize({ 
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose',
+      fontFamily: 'inherit'
+    });
+    
+    // 预加载 Tauri 插件（如果可用）
+    if (browser && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      import('@tauri-apps/plugin-dialog').then(module => {
+        dialogModule = module;
+      }).catch(() => {});
+      import('@tauri-apps/plugin-fs').then(module => {
+        fsModule = module;
+      }).catch(() => {});
+    }
+  });
+
   // 检查 SVG 内容是否有效
   function isValidSVG(content: string): boolean {
     if (!content.trim()) return false;
@@ -189,6 +413,15 @@
         <FileText class="w-4 h-4" />
         <span class="text-sm font-medium">{t('previewer.markdown')}</span>
       </button>
+      <button
+        onclick={() => activeView = 'mermaid'}
+        class="flex items-center gap-2 px-4 py-3 border-b-2 transition-colors {activeView === 'mermaid'
+          ? 'border-primary-600 dark:border-primary-400 text-primary-600 dark:text-primary-400 bg-gray-50 dark:bg-gray-800'
+          : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800'}"
+      >
+        <GitBranch class="w-4 h-4" />
+        <span class="text-sm font-medium">{t('previewer.mermaid')}</span>
+      </button>
     </div>
   </div>
 
@@ -227,22 +460,32 @@
               {/if}
             </button>
           </div>
-          <button
-            onclick={clear}
-            class="btn-secondary text-sm"
-          >
-            <Trash2 class="w-4 h-4 inline mr-1" />
-            {t('common.clear')}
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              onclick={exportPreviewAsImage}
+              class="btn-secondary text-sm"
+              disabled={!svgContent.trim() || !isValidSVG(svgContent)}
+            >
+              <Download class="w-4 h-4 inline mr-1" />
+              {t('previewer.exportImage')}
+            </button>
+            <button
+              onclick={clear}
+              class="btn-secondary text-sm"
+            >
+              <Trash2 class="w-4 h-4 inline mr-1" />
+              {t('common.clear')}
+            </button>
+          </div>
         </div>
         
         <div class="flex-1 min-h-0 grid grid-cols-2 gap-2">
           <!-- SVG 输入 -->
           <div class="card flex flex-col h-full">
             <div class="flex items-center justify-between mb-2 flex-shrink-0">
-              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
                 {t('previewer.svgInput')}
-              </label>
+              </span>
             </div>
             <div class="flex-1 min-h-0">
               <textarea
@@ -254,7 +497,7 @@
           </div>
 
           <!-- SVG 预览 -->
-          <div class="card flex flex-col h-full">
+          <div class="card flex flex-col h-full" data-preview="svg">
             <div class="flex items-center justify-between mb-2 flex-shrink-0">
               <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300">
                 {t('previewer.preview')}
@@ -332,9 +575,9 @@
           <!-- Markdown 输入 -->
           <div class="card flex flex-col h-full">
             <div class="flex items-center justify-between mb-2 flex-shrink-0">
-              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
                 {t('previewer.markdownInput')}
-              </label>
+              </span>
             </div>
             <div class="flex-1 min-h-0">
               <textarea
@@ -360,6 +603,92 @@
               {:else}
                 <div class="flex items-center justify-center h-full text-gray-400 dark:text-gray-500 text-sm">
                   {t('previewer.markdownPlaceholder')}
+                </div>
+              {/if}
+            </div>
+          </div>
+        </div>
+      </div>
+    {:else if activeView === 'mermaid'}
+      <!-- Mermaid Preview - 左右布局 -->
+      <div class="flex-1 min-h-0 flex flex-col">
+        <div class="flex items-center justify-between mb-2 flex-shrink-0">
+          <div class="flex items-center gap-4">
+            <input
+              type="file"
+              accept=".mmd,.mermaid,.md,.txt,text/plain"
+              onchange={handleMermaidFileSelect}
+              bind:this={mermaidFileInput}
+              class="hidden"
+              id="mermaid-file-input"
+            />
+            <label
+              for="mermaid-file-input"
+              class="btn-secondary cursor-pointer flex items-center text-sm"
+            >
+              <GitBranch class="w-4 h-4 inline mr-1" />
+              {t('previewer.selectFile')}
+            </label>
+            <button
+              onclick={() => copyToClipboard(mermaidContent, 'mermaid')}
+              class="btn-secondary text-sm transition-all duration-200 {copied.mermaid ? 'bg-green-500 hover:bg-green-600 text-white' : ''}"
+            >
+              {#if copied.mermaid}
+                <Check class="w-4 h-4 inline mr-1" />
+                {t('common.copied')}
+              {:else}
+                <Copy class="w-4 h-4 inline mr-1" />
+                {t('common.copy')}
+              {/if}
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              onclick={exportPreviewAsImage}
+              class="btn-secondary text-sm"
+              disabled={!mermaidContent.trim()}
+            >
+              <Download class="w-4 h-4 inline mr-1" />
+              {t('previewer.exportImage')}
+            </button>
+            <button
+              onclick={clear}
+              class="btn-secondary text-sm"
+            >
+              <Trash2 class="w-4 h-4 inline mr-1" />
+              {t('common.clear')}
+            </button>
+          </div>
+        </div>
+        
+        <div class="flex-1 min-h-0 grid grid-cols-2 gap-2">
+          <!-- Mermaid 输入 -->
+          <div class="card flex flex-col h-full">
+            <div class="flex items-center justify-between mb-2 flex-shrink-0">
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {t('previewer.mermaidInput')}
+              </span>
+            </div>
+            <div class="flex-1 min-h-0">
+              <textarea
+                bind:value={mermaidContent}
+                placeholder={t('previewer.mermaidPlaceholder')}
+                class="textarea font-mono text-sm h-full resize-none"
+              ></textarea>
+            </div>
+          </div>
+
+          <!-- Mermaid 预览 -->
+          <div class="card flex flex-col h-full">
+            <div class="flex items-center justify-between mb-2 flex-shrink-0">
+              <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {t('previewer.preview')}
+              </h3>
+            </div>
+            <div class="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg overflow-auto bg-white dark:bg-gray-800 p-6 min-h-0" bind:this={mermaidContainer}>
+              {#if !mermaidContent.trim()}
+                <div class="flex items-center justify-center h-full text-gray-400 dark:text-gray-500 text-sm">
+                  {t('previewer.mermaidPlaceholder')}
                 </div>
               {/if}
             </div>

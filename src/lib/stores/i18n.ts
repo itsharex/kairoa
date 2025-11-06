@@ -257,14 +257,18 @@ const translations = {
     previewer: {
       svg: 'SVG Preview',
       markdown: 'Markdown Preview',
+      mermaid: 'Mermaid Preview',
       svgInput: 'SVG Code',
       markdownInput: 'Markdown',
+      mermaidInput: 'Mermaid Code',
       svgPlaceholder: 'Paste your SVG code here...',
       markdownPlaceholder: 'Enter Markdown content...',
+      mermaidPlaceholder: 'Enter Mermaid diagram code...',
       preview: 'Preview',
       invalidSVG: 'Invalid SVG',
       invalidSVGMessage: 'Please enter valid SVG code',
-      selectFile: 'Select File'
+      selectFile: 'Select File',
+      exportImage: 'Export as Image'
     },
     apiClient: {
       urlPlaceholder: 'Enter API URL...',
@@ -563,14 +567,18 @@ const translations = {
     previewer: {
       svg: 'SVG 预览',
       markdown: 'Markdown 预览',
+      mermaid: 'Mermaid 预览',
       svgInput: 'SVG 代码',
       markdownInput: 'Markdown',
+      mermaidInput: 'Mermaid 代码',
       svgPlaceholder: '在此处粘贴 SVG 代码...',
       markdownPlaceholder: '输入 Markdown 内容...',
+      mermaidPlaceholder: '输入 Mermaid 图表代码...',
       preview: '预览',
       invalidSVG: '无效的 SVG',
       invalidSVGMessage: '请输入有效的 SVG 代码',
-      selectFile: '选择文件'
+      selectFile: '选择文件',
+      exportImage: '导出为图片'
     },
     apiClient: {
       urlPlaceholder: '输入 API URL...',
