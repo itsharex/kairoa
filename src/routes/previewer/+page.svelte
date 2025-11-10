@@ -237,7 +237,8 @@
       }
     } else if (activeView === 'mermaid') {
       // Mermaid 预览：导出 Mermaid 容器
-      if (mermaidContainer && mermaidContainer.querySelector('.mermaid')) {
+      // Mermaid 渲染后，.mermaid 元素会被转换为 SVG，所以检查 SVG 或 .mermaid
+      if (mermaidContainer && (mermaidContainer.querySelector('svg') || mermaidContainer.querySelector('.mermaid'))) {
         elementToExport = mermaidContainer;
         filename = 'mermaid-preview';
       }
@@ -277,7 +278,13 @@
           }
 
           // 打开保存对话框
-          const filePath = await dialogModule.save({
+          // Tauri 2.0 插件使用命名导出
+          const { save } = dialogModule;
+          if (!save || typeof save !== 'function') {
+            throw new Error('save function not found in dialog module');
+          }
+          
+          const filePath = await save({
             defaultPath: `${filename}-${Date.now()}.png`,
             filters: [{
               name: 'PNG Image',
@@ -285,24 +292,74 @@
             }]
           });
 
-          if (filePath) {
-            // 将 canvas 转换为 blob，然后转换为 Uint8Array
-            canvas.toBlob(async (blob) => {
-              if (!blob) {
-                alert('Failed to generate image.');
-                return;
-              }
-
-              const arrayBuffer = await blob.arrayBuffer();
-              const uint8Array = new Uint8Array(arrayBuffer);
-
-              // 写入文件
-              await fsModule.writeBinaryFile(filePath, uint8Array);
-            }, 'image/png');
+          if (!filePath) {
+            // 用户取消了保存对话框
+            return;
           }
+
+          // 将 canvas 转换为 blob，然后转换为 Uint8Array
+          // 使用 Promise 包装 toBlob 以确保异步操作完成，并添加超时处理
+          await new Promise<void>((resolve, reject) => {
+            // 设置超时（10秒）
+            const timeout = setTimeout(() => {
+              reject(new Error('Timeout: Failed to generate image blob within 10 seconds.'));
+            }, 10000);
+
+            try {
+              canvas.toBlob(async (blob) => {
+                clearTimeout(timeout);
+                
+                try {
+                  if (!blob) {
+                    reject(new Error('Failed to generate image blob: blob is null.'));
+                    return;
+                  }
+
+                  console.log('Image blob generated, size:', blob.size);
+
+                  const arrayBuffer = await blob.arrayBuffer();
+                  const uint8Array = new Uint8Array(arrayBuffer);
+
+                  console.log('Writing file to:', filePath);
+                  
+                  // 写入文件 - Tauri 2.0 插件使用 writeFile（不是 writeBinaryFile）
+                  const { writeFile } = fsModule;
+                  if (!writeFile || typeof writeFile !== 'function') {
+                    throw new Error('writeFile function not found in fs module');
+                  }
+                  
+                  await writeFile(filePath, uint8Array);
+                  
+                  console.log('File saved successfully');
+                  resolve();
+                } catch (error) {
+                  console.error('Error in toBlob callback:', error);
+                  reject(error);
+                }
+              }, 'image/png');
+
+              // 如果 canvas.toBlob 立即失败（某些浏览器可能不支持）
+              if (typeof canvas.toBlob !== 'function') {
+                clearTimeout(timeout);
+                reject(new Error('canvas.toBlob is not supported'));
+              }
+            } catch (error) {
+              clearTimeout(timeout);
+              reject(error);
+            }
+          });
         } catch (error) {
           console.error('Tauri export error:', error);
-          alert('Failed to export image. Please try again.');
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error('Error details:', {
+            error,
+            dialogModule: !!dialogModule,
+            fsModule: !!fsModule,
+            canvas: !!canvas,
+            canvasWidth: canvas?.width,
+            canvasHeight: canvas?.height
+          });
+          alert(`Failed to export image: ${errorMessage}`);
         }
       } else {
         // 浏览器环境：使用下载链接
