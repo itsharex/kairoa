@@ -4,7 +4,7 @@
   import { page } from '$app/stores';
   import CryptoJS from 'crypto-js';
   
-  type CryptoType = 'rsa' | 'symmetric';
+  type CryptoType = 'rsa' | 'asymmetric' | 'symmetric';
   
   let cryptoType = $state<CryptoType>('rsa');
   
@@ -13,6 +13,8 @@
     const typeParam = $page.url.searchParams.get('type');
     if (typeParam === 'rsa') {
       cryptoType = 'rsa';
+    } else if (typeParam === 'asymmetric') {
+      cryptoType = 'asymmetric';
     } else if (typeParam === 'symmetric') {
       cryptoType = 'symmetric';
     }
@@ -45,6 +47,21 @@
   let isEncrypting = $state(true);
   let symmetricCopied = $state(false);
   let symmetricError = $state('');
+  
+  // Asymmetric algorithm state
+  type AsymmetricAlgorithm = 'RSA-OAEP' | 'RSA-PSS' | 'ECDSA' | 'ECDH' | 'DSA';
+  type AsymmetricOperation = 'encrypt' | 'decrypt' | 'sign' | 'verify' | 'keyExchange';
+  type NamedCurve = 'P-256' | 'P-384' | 'P-521';
+  let asymmetricAlgorithm = $state<AsymmetricAlgorithm>('RSA-OAEP');
+  let asymmetricOperation = $state<AsymmetricOperation>('encrypt');
+  let namedCurve = $state<NamedCurve>('P-256'); // For ECDSA and ECDH
+  let asymmetricPublicKey = $state('');
+  let asymmetricPrivateKey = $state('');
+  let asymmetricPeerPublicKey = $state(''); // For ECDH key exchange
+  let asymmetricInput = $state('');
+  let asymmetricOutput = $state('');
+  let asymmetricError = $state('');
+  let asymmetricCopied = $state(false);
 
   let translations = $derived($translationsStore);
 
@@ -65,6 +82,19 @@
       privateKey = '';
       publicKeyCopied = false;
       privateKeyCopied = false;
+    }
+    // Reset asymmetric state
+    if (type === 'asymmetric') {
+      asymmetricPublicKey = '';
+      asymmetricPrivateKey = '';
+      asymmetricPeerPublicKey = '';
+      asymmetricInput = '';
+      asymmetricOutput = '';
+      asymmetricError = '';
+      asymmetricCopied = false;
+      asymmetricAlgorithm = 'RSA-OAEP';
+      asymmetricOperation = 'encrypt';
+      namedCurve = 'P-256';
     }
     // Reset symmetric state
     if (type === 'symmetric') {
@@ -212,6 +242,466 @@
     privateKey = '';
     publicKeyCopied = false;
     privateKeyCopied = false;
+  }
+  
+  // PEM to ArrayBuffer (extract base64 content)
+  function pemToArrayBuffer(pem: string): ArrayBuffer {
+    // Remove PEM headers/footers and whitespace
+    const base64 = pem
+      .replace(/-----BEGIN (PUBLIC|PRIVATE) KEY-----/g, '')
+      .replace(/-----END (PUBLIC|PRIVATE) KEY-----/g, '')
+      .replace(/\s/g, '');
+    
+    // Convert base64 to binary
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+  
+  // Import RSA public key from PEM
+  async function importRSAPublicKey(pem: string): Promise<CryptoKey> {
+    const keyData = pemToArrayBuffer(pem);
+    return await crypto.subtle.importKey(
+      'spki',
+      keyData,
+      {
+        name: 'RSA-OAEP',
+        hash: 'SHA-256',
+      },
+      false,
+      ['encrypt']
+    );
+  }
+  
+  // Import RSA private key from PEM
+  async function importRSAPrivateKey(pem: string): Promise<CryptoKey> {
+    const keyData = pemToArrayBuffer(pem);
+    return await crypto.subtle.importKey(
+      'pkcs8',
+      keyData,
+      {
+        name: 'RSA-OAEP',
+        hash: 'SHA-256',
+      },
+      false,
+      ['decrypt']
+    );
+  }
+  
+  // Import RSA public key for signing (RSA-PSS)
+  async function importRSAPublicKeyForSigning(pem: string): Promise<CryptoKey> {
+    const keyData = pemToArrayBuffer(pem);
+    return await crypto.subtle.importKey(
+      'spki',
+      keyData,
+      {
+        name: 'RSA-PSS',
+        hash: 'SHA-256',
+      },
+      false,
+      ['verify']
+    );
+  }
+  
+  // Import RSA private key for signing (RSA-PSS)
+  async function importRSAPrivateKeyForSigning(pem: string): Promise<CryptoKey> {
+    const keyData = pemToArrayBuffer(pem);
+    return await crypto.subtle.importKey(
+      'pkcs8',
+      keyData,
+      {
+        name: 'RSA-PSS',
+        hash: 'SHA-256',
+      },
+      false,
+      ['sign']
+    );
+  }
+  
+  // RSA-OAEP Encrypt
+  async function encryptRSAOAEP() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPublicKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.publicKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      const publicKey = await importRSAPublicKey(asymmetricPublicKey);
+      const inputBuffer = new TextEncoder().encode(asymmetricInput);
+      
+      // RSA-OAEP has a maximum message size based on key size
+      // For 2048-bit key, max is 190 bytes (256 - 2*32 - 2)
+      const encrypted = await crypto.subtle.encrypt(
+        {
+          name: 'RSA-OAEP',
+        },
+        publicKey,
+        inputBuffer
+      );
+      
+      asymmetricOutput = arrayBufferToBase64(encrypted);
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+  
+  // RSA-OAEP Decrypt
+  async function decryptRSAOAEP() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPrivateKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.privateKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      const privateKey = await importRSAPrivateKey(asymmetricPrivateKey);
+      const encryptedBuffer = base64ToArrayBuffer(asymmetricInput);
+      
+      const decrypted = await crypto.subtle.decrypt(
+        {
+          name: 'RSA-OAEP',
+        },
+        privateKey,
+        encryptedBuffer
+      );
+      
+      asymmetricOutput = new TextDecoder().decode(decrypted);
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Invalid encrypted data or key'}`;
+    }
+  }
+  
+  // RSA-PSS Sign
+  async function signRSAPSS() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPrivateKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.privateKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      const privateKey = await importRSAPrivateKeyForSigning(asymmetricPrivateKey);
+      const inputBuffer = new TextEncoder().encode(asymmetricInput);
+      
+      const signature = await crypto.subtle.sign(
+        {
+          name: 'RSA-PSS',
+          saltLength: 32,
+        },
+        privateKey,
+        inputBuffer
+      );
+      
+      asymmetricOutput = arrayBufferToBase64(signature);
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+  
+  // RSA-PSS Verify
+  async function verifyRSAPSS() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPublicKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.publicKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    // For verification, input should be the original message
+    // We need to split message and signature, or use a different approach
+    // For now, let's assume the user provides message and signature separately
+    // We'll use a simple format: message|signature
+    try {
+      const publicKey = await importRSAPublicKeyForSigning(asymmetricPublicKey);
+      
+      // Try to parse as message|signature format
+      const parts = asymmetricInput.split('|');
+      if (parts.length !== 2) {
+        asymmetricError = t('crypto.asymmetric.invalidFormat');
+        return;
+      }
+      
+      const message = parts[0];
+      const signatureBase64 = parts[1];
+      
+      const messageBuffer = new TextEncoder().encode(message);
+      const signatureBuffer = base64ToArrayBuffer(signatureBase64);
+      
+      const isValid = await crypto.subtle.verify(
+        {
+          name: 'RSA-PSS',
+          saltLength: 32,
+        },
+        publicKey,
+        signatureBuffer,
+        messageBuffer
+      );
+      
+      asymmetricOutput = isValid ? t('crypto.asymmetric.verificationSuccess') : t('crypto.asymmetric.verificationFailed');
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Invalid signature or key'}`;
+    }
+  }
+  
+  // Import ECDSA public key from PEM
+  async function importECDSAPublicKey(pem: string, curve: NamedCurve): Promise<CryptoKey> {
+    const keyData = pemToArrayBuffer(pem);
+    return await crypto.subtle.importKey(
+      'spki',
+      keyData,
+      {
+        name: 'ECDSA',
+        namedCurve: curve,
+      },
+      false,
+      ['verify']
+    );
+  }
+  
+  // Import ECDSA private key from PEM
+  async function importECDSAPrivateKey(pem: string, curve: NamedCurve): Promise<CryptoKey> {
+    const keyData = pemToArrayBuffer(pem);
+    return await crypto.subtle.importKey(
+      'pkcs8',
+      keyData,
+      {
+        name: 'ECDSA',
+        namedCurve: curve,
+      },
+      false,
+      ['sign']
+    );
+  }
+  
+  // ECDSA Sign
+  async function signECDSA() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPrivateKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.privateKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      const privateKey = await importECDSAPrivateKey(asymmetricPrivateKey, namedCurve);
+      const inputBuffer = new TextEncoder().encode(asymmetricInput);
+      
+      const signature = await crypto.subtle.sign(
+        {
+          name: 'ECDSA',
+          hash: 'SHA-256',
+        },
+        privateKey,
+        inputBuffer
+      );
+      
+      asymmetricOutput = arrayBufferToBase64(signature);
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+  
+  // ECDSA Verify
+  async function verifyECDSA() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPublicKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.publicKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      const publicKey = await importECDSAPublicKey(asymmetricPublicKey, namedCurve);
+      
+      // Parse message|signature format
+      const parts = asymmetricInput.split('|');
+      if (parts.length !== 2) {
+        asymmetricError = t('crypto.asymmetric.invalidFormat');
+        return;
+      }
+      
+      const message = parts[0];
+      const signatureBase64 = parts[1];
+      
+      const messageBuffer = new TextEncoder().encode(message);
+      const signatureBuffer = base64ToArrayBuffer(signatureBase64);
+      
+      const isValid = await crypto.subtle.verify(
+        {
+          name: 'ECDSA',
+          hash: 'SHA-256',
+        },
+        publicKey,
+        signatureBuffer,
+        messageBuffer
+      );
+      
+      asymmetricOutput = isValid ? t('crypto.asymmetric.verificationSuccess') : t('crypto.asymmetric.verificationFailed');
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Invalid signature or key'}`;
+    }
+  }
+  
+  // Import ECDH public key from PEM
+  async function importECDHPublicKey(pem: string, curve: NamedCurve): Promise<CryptoKey> {
+    const keyData = pemToArrayBuffer(pem);
+    return await crypto.subtle.importKey(
+      'spki',
+      keyData,
+      {
+        name: 'ECDH',
+        namedCurve: curve,
+      },
+      false,
+      []
+    );
+  }
+  
+  // Import ECDH private key from PEM
+  async function importECDHPrivateKey(pem: string, curve: NamedCurve): Promise<CryptoKey> {
+    const keyData = pemToArrayBuffer(pem);
+    return await crypto.subtle.importKey(
+      'pkcs8',
+      keyData,
+      {
+        name: 'ECDH',
+        namedCurve: curve,
+      },
+      false,
+      ['deriveBits', 'deriveKey']
+    );
+  }
+  
+  // ECDH Key Exchange
+  async function exchangeECDH() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPrivateKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.privateKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricPeerPublicKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.peerPublicKeyRequired');
+      return;
+    }
+    
+    try {
+      const privateKey = await importECDHPrivateKey(asymmetricPrivateKey, namedCurve);
+      const peerPublicKey = await importECDHPublicKey(asymmetricPeerPublicKey, namedCurve);
+      
+      // Derive shared secret (256 bits = 32 bytes)
+      const sharedSecret = await crypto.subtle.deriveBits(
+        {
+          name: 'ECDH',
+          public: peerPublicKey,
+        },
+        privateKey,
+        256 // 256 bits = 32 bytes
+      );
+      
+      // Convert to Base64 for display
+      asymmetricOutput = arrayBufferToBase64(sharedSecret);
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+  
+  // Execute asymmetric operation
+  async function executeAsymmetricOperation() {
+    if (asymmetricAlgorithm === 'RSA-OAEP') {
+      if (asymmetricOperation === 'encrypt') {
+        await encryptRSAOAEP();
+      } else if (asymmetricOperation === 'decrypt') {
+        await decryptRSAOAEP();
+      }
+    } else if (asymmetricAlgorithm === 'RSA-PSS') {
+      if (asymmetricOperation === 'sign') {
+        await signRSAPSS();
+      } else if (asymmetricOperation === 'verify') {
+        await verifyRSAPSS();
+      }
+    } else if (asymmetricAlgorithm === 'ECDSA') {
+      if (asymmetricOperation === 'sign') {
+        await signECDSA();
+      } else if (asymmetricOperation === 'verify') {
+        await verifyECDSA();
+      }
+    } else if (asymmetricAlgorithm === 'ECDH') {
+      if (asymmetricOperation === 'keyExchange') {
+        await exchangeECDH();
+      }
+    } else if (asymmetricAlgorithm === 'DSA') {
+      asymmetricError = t('crypto.asymmetric.dsaNotSupported');
+    }
+  }
+  
+  // Copy asymmetric output to clipboard
+  async function copyAsymmetricToClipboard() {
+    try {
+      await navigator.clipboard.writeText(asymmetricOutput);
+      asymmetricCopied = true;
+      setTimeout(() => {
+        asymmetricCopied = false;
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to copy:', error);
+    }
+  }
+  
+  // Clear asymmetric data
+  function clearAsymmetric() {
+    asymmetricPublicKey = '';
+    asymmetricPrivateKey = '';
+    asymmetricPeerPublicKey = '';
+    asymmetricInput = '';
+    asymmetricOutput = '';
+    asymmetricError = '';
+    asymmetricCopied = false;
   }
   
   // Text to ArrayBuffer (UTF-8 encoding)
@@ -844,6 +1334,17 @@
             {/if}
           </button>
           <button
+            onclick={() => switchCryptoType('asymmetric')}
+            class="px-4 py-2 relative transition-colors font-medium {cryptoType === 'asymmetric'
+              ? 'text-primary-600 dark:text-primary-400'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+          >
+            {t('crypto.asymmetric.title')}
+            {#if cryptoType === 'asymmetric'}
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-600 dark:text-primary-400"></span>
+            {/if}
+          </button>
+          <button
             onclick={() => switchCryptoType('symmetric')}
             class="px-4 py-2 relative transition-colors font-medium {cryptoType === 'symmetric'
               ? 'text-primary-600 dark:text-primary-400'
@@ -1000,6 +1501,271 @@
               </div>
             </div>
           {/if}
+          </div>
+      {:else if cryptoType === 'asymmetric'}
+        <!-- Asymmetric Algorithm -->
+        <div class="flex-1 flex flex-col space-y-4 min-h-0 overflow-y-auto">
+          <!-- Algorithm selection -->
+          <div class="flex-shrink-0">
+            <label for="asymmetric-algorithm" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+              {t('crypto.asymmetric.algorithm')}
+            </label>
+            <select
+              id="asymmetric-algorithm"
+              bind:value={asymmetricAlgorithm}
+              class="input w-full"
+            >
+              <option value="RSA-OAEP">RSA-OAEP (Encryption/Decryption)</option>
+              <option value="RSA-PSS">RSA-PSS (Sign/Verify)</option>
+              <option value="ECDSA">ECDSA (Sign/Verify)</option>
+              <option value="ECDH">ECDH (Key Exchange)</option>
+              <option value="DSA">DSA (Not Supported)</option>
+            </select>
+          </div>
+
+          <!-- Curve selection for ECDSA and ECDH -->
+          {#if asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'ECDH'}
+            <div class="flex-shrink-0">
+              <label for="named-curve" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                {t('crypto.asymmetric.namedCurve')}
+              </label>
+              <select
+                id="named-curve"
+                bind:value={namedCurve}
+                class="input w-full"
+              >
+                <option value="P-256">P-256 (secp256r1)</option>
+                <option value="P-384">P-384 (secp384r1)</option>
+                <option value="P-521">P-521 (secp521r1)</option>
+              </select>
+            </div>
+          {/if}
+
+          <!-- Operation selection -->
+          <div class="flex-shrink-0">
+            <label for="asymmetric-operation" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+              {t('crypto.asymmetric.operation')}
+            </label>
+            <select
+              id="asymmetric-operation"
+              bind:value={asymmetricOperation}
+              class="input w-full"
+            >
+              {#if asymmetricAlgorithm === 'RSA-OAEP'}
+                <option value="encrypt">{t('crypto.asymmetric.encrypt')}</option>
+                <option value="decrypt">{t('crypto.asymmetric.decrypt')}</option>
+              {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA'}
+                <option value="sign">{t('crypto.asymmetric.sign')}</option>
+                <option value="verify">{t('crypto.asymmetric.verify')}</option>
+              {:else if asymmetricAlgorithm === 'ECDH'}
+                <option value="keyExchange">{t('crypto.asymmetric.keyExchange')}</option>
+              {:else if asymmetricAlgorithm === 'DSA'}
+                <option value="sign" disabled>{t('crypto.asymmetric.sign')}</option>
+                <option value="verify" disabled>{t('crypto.asymmetric.verify')}</option>
+              {/if}
+            </select>
+          </div>
+
+          <!-- Key inputs -->
+          <div class="flex-shrink-0 grid grid-cols-2 gap-4">
+            {#if asymmetricAlgorithm === 'RSA-OAEP'}
+              {#if asymmetricOperation === 'encrypt'}
+                <!-- Public key for encryption -->
+                <div class="col-span-2">
+                  <label for="asymmetric-public-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.asymmetric.publicKey')}
+                  </label>
+                  <textarea
+                    id="asymmetric-public-key"
+                    bind:value={asymmetricPublicKey}
+                    placeholder={t('crypto.asymmetric.publicKeyPlaceholder')}
+                    class="textarea font-mono text-sm min-h-[120px]"
+                  ></textarea>
+                </div>
+              {:else}
+                <!-- Private key for decryption -->
+                <div class="col-span-2">
+                  <label for="asymmetric-private-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.asymmetric.privateKey')}
+                  </label>
+                  <textarea
+                    id="asymmetric-private-key"
+                    bind:value={asymmetricPrivateKey}
+                    placeholder={t('crypto.asymmetric.privateKeyPlaceholder')}
+                    class="textarea font-mono text-sm min-h-[120px]"
+                  ></textarea>
+                </div>
+              {/if}
+            {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA'}
+              {#if asymmetricOperation === 'sign'}
+                <!-- Private key for signing -->
+                <div class="col-span-2">
+                  <label for="asymmetric-private-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.asymmetric.privateKey')}
+                  </label>
+                  <textarea
+                    id="asymmetric-private-key"
+                    bind:value={asymmetricPrivateKey}
+                    placeholder={t('crypto.asymmetric.privateKeyPlaceholder')}
+                    class="textarea font-mono text-sm min-h-[120px]"
+                  ></textarea>
+                </div>
+              {:else}
+                <!-- Public key for verification -->
+                <div class="col-span-2">
+                  <label for="asymmetric-public-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.asymmetric.publicKey')}
+                  </label>
+                  <textarea
+                    id="asymmetric-public-key"
+                    bind:value={asymmetricPublicKey}
+                    placeholder={t('crypto.asymmetric.publicKeyPlaceholder')}
+                    class="textarea font-mono text-sm min-h-[120px]"
+                  ></textarea>
+                </div>
+              {/if}
+            {:else if asymmetricAlgorithm === 'ECDH'}
+              <!-- Private key and peer public key for key exchange -->
+              <div>
+                <label for="asymmetric-private-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                  {t('crypto.asymmetric.privateKey')}
+                </label>
+                <textarea
+                  id="asymmetric-private-key"
+                  bind:value={asymmetricPrivateKey}
+                  placeholder={t('crypto.asymmetric.privateKeyPlaceholder')}
+                  class="textarea font-mono text-sm min-h-[120px]"
+                ></textarea>
+              </div>
+              <div>
+                <label for="asymmetric-peer-public-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                  {t('crypto.asymmetric.peerPublicKey')}
+                </label>
+                <textarea
+                  id="asymmetric-peer-public-key"
+                  bind:value={asymmetricPeerPublicKey}
+                  placeholder={t('crypto.asymmetric.peerPublicKeyPlaceholder')}
+                  class="textarea font-mono text-sm min-h-[120px]"
+                ></textarea>
+              </div>
+            {:else if asymmetricAlgorithm === 'DSA'}
+              <!-- DSA not supported message -->
+              <div class="col-span-2">
+                <div class="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                  <p class="text-sm text-yellow-800 dark:text-yellow-200">
+                    {t('crypto.asymmetric.dsaNotSupported')}
+                  </p>
+                </div>
+              </div>
+            {/if}
+          </div>
+
+          <!-- Execute button -->
+          <div class="flex gap-2 flex-shrink-0">
+            <button
+              onclick={executeAsymmetricOperation}
+              class="px-4 py-2 text-white rounded-lg transition-colors font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+              style="background-color: #818089;"
+              disabled={asymmetricAlgorithm === 'DSA'}
+            >
+              {#if asymmetricAlgorithm === 'RSA-OAEP'}
+                {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.encrypt') : t('crypto.asymmetric.decrypt')}
+              {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA'}
+                {asymmetricOperation === 'sign' ? t('crypto.asymmetric.sign') : t('crypto.asymmetric.verify')}
+              {:else if asymmetricAlgorithm === 'ECDH'}
+                {t('crypto.asymmetric.keyExchange')}
+              {:else if asymmetricAlgorithm === 'DSA'}
+                {t('crypto.asymmetric.notSupported')}
+              {/if}
+            </button>
+            <button
+              onclick={clearAsymmetric}
+              class="btn-secondary"
+            >
+              {t('common.clear')}
+            </button>
+          </div>
+
+          <!-- Error message -->
+          {#if asymmetricError}
+            <div class="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex-shrink-0">
+              <p class="text-sm text-red-800 dark:text-red-200">{asymmetricError}</p>
+            </div>
+          {/if}
+
+          <!-- Input/Output area -->
+          <div class="flex-1 grid grid-cols-2 gap-4 min-h-0">
+            <!-- Input -->
+            <div class="flex flex-col space-y-2">
+              <div class="flex items-center justify-between h-6">
+                <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {#if asymmetricAlgorithm === 'RSA-OAEP'}
+                    {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.plaintext') : t('crypto.asymmetric.ciphertext')}
+                  {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA'}
+                    {asymmetricOperation === 'sign' ? t('crypto.asymmetric.message') : t('crypto.asymmetric.messageAndSignature')}
+                  {:else if asymmetricAlgorithm === 'ECDH'}
+                    {t('crypto.asymmetric.notApplicable')}
+                  {:else if asymmetricAlgorithm === 'DSA'}
+                    {t('crypto.asymmetric.notApplicable')}
+                  {/if}
+                </span>
+                <div class="w-0"></div>
+              </div>
+              <textarea
+                bind:value={asymmetricInput}
+                placeholder={asymmetricAlgorithm === 'ECDH' || asymmetricAlgorithm === 'DSA'
+                  ? t('crypto.asymmetric.notApplicable')
+                  : (asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA') && asymmetricOperation === 'verify' 
+                    ? t('crypto.asymmetric.messageAndSignaturePlaceholder')
+                    : t('crypto.asymmetric.inputPlaceholder')}
+                class="textarea font-mono text-sm flex-1 resize-none"
+                disabled={asymmetricAlgorithm === 'ECDH' || asymmetricAlgorithm === 'DSA'}
+              ></textarea>
+            </div>
+
+            <!-- Output -->
+            <div class="flex flex-col space-y-2">
+              <div class="flex items-center justify-between h-6">
+                <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {#if asymmetricAlgorithm === 'RSA-OAEP'}
+                    {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.ciphertext') : t('crypto.asymmetric.plaintext')}
+                  {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA'}
+                    {asymmetricOperation === 'sign' ? t('crypto.asymmetric.signature') : t('crypto.asymmetric.verificationResult')}
+                  {:else if asymmetricAlgorithm === 'ECDH'}
+                    {t('crypto.asymmetric.sharedSecret')}
+                  {:else if asymmetricAlgorithm === 'DSA'}
+                    {t('crypto.asymmetric.notApplicable')}
+                  {/if}
+                </span>
+                {#if asymmetricOutput}
+                  <button
+                    onclick={copyAsymmetricToClipboard}
+                    class="btn-secondary text-xs transition-all duration-200 {asymmetricCopied ? 'bg-green-500 hover:bg-green-600 text-white' : ''}"
+                  >
+                    {#if asymmetricCopied}
+                      <span class="flex items-center gap-1">
+                        <Check class="w-4 h-4" />
+                        {t('common.copied')}
+                      </span>
+                    {:else}
+                      <span class="flex items-center gap-1">
+                        <Copy class="w-4 h-4" />
+                        {t('common.copy')}
+                      </span>
+                    {/if}
+                  </button>
+                {:else}
+                  <div class="w-0"></div>
+                {/if}
+              </div>
+              <textarea
+                value={asymmetricOutput}
+                readonly
+                placeholder={t('crypto.asymmetric.outputPlaceholder')}
+                class="textarea font-mono text-sm flex-1 resize-none {asymmetricCopied ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700' : ''} transition-colors duration-300"
+              ></textarea>
+            </div>
+          </div>
         </div>
       {:else if cryptoType === 'symmetric'}
         <!-- Symmetric Algorithm -->
@@ -1180,9 +1946,9 @@
             <!-- Input -->
             <div class="flex flex-col space-y-2">
               <div class="flex items-center justify-between h-6">
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   {isEncrypting ? t('crypto.symmetric.plaintext') : t('crypto.symmetric.ciphertext')}
-                </label>
+                </span>
                 <div class="w-0"></div>
               </div>
               <textarea
@@ -1195,9 +1961,9 @@
             <!-- Output -->
             <div class="flex flex-col space-y-2">
               <div class="flex items-center justify-between h-6">
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   {isEncrypting ? t('crypto.symmetric.ciphertext') : t('crypto.symmetric.plaintext')}
-                </label>
+                </span>
                 {#if symmetricOutput}
                   <button
                     onclick={copySymmetricToClipboard}

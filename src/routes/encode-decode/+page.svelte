@@ -593,9 +593,9 @@
         <div class="flex-1 flex flex-col space-y-4 min-h-0">
           <!-- 输入区域 -->
           <div class="flex-shrink-0">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               {t('jwt.input')}
-            </label>
+            </span>
             <textarea
               bind:value={jwtToken}
               placeholder={t('jwt.placeholder')}

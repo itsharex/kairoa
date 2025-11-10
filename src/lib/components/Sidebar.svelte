@@ -28,6 +28,7 @@
       key: 'nav.crypto',
       subItems: [
         { label: 'RSA 密钥对', key: 'rsa.title', type: 'rsa' },
+        { label: '非对称算法', key: 'crypto.asymmetric.title', type: 'asymmetric' },
         { label: '对称算法', key: 'crypto.symmetric.title', type: 'symmetric' }
       ]
     },
@@ -231,6 +232,7 @@
       {#if item.subItems && item.subItems.length > 0}
         <!-- 显示子菜单列表 -->
         <div 
+          role="menu"
           class="submenu-tooltip fixed bg-gray-900 dark:bg-gray-700 text-white text-sm rounded-lg shadow-lg z-[9999] py-2 min-w-[160px]"
           style="left: {tooltipPosition.x}px; top: {tooltipPosition.y}px;"
           onmouseenter={() => {
