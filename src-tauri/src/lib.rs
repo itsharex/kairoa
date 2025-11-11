@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use base64::{Engine as _, engine::general_purpose};
+use dsa::{SigningKey, VerifyingKey, Components, Signature};
+use rand::rngs::OsRng;
+use pkcs8::{EncodePrivateKey, EncodePublicKey, DecodePrivateKey, DecodePublicKey, LineEnding};
+use signature::{Signer, Verifier};
+use sha2::{Sha256, Digest};
+use der::Encode;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpRequest {
@@ -139,6 +145,165 @@ async fn http_request(request: HttpRequest) -> Result<HttpResponse, String> {
     }
 }
 
+// DSA 密钥对响应结构
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DsaKeyPair {
+    public_key: String,
+    private_key: String,
+    format: String,
+}
+
+// 生成 DSA 密钥对（异步版本以避免阻塞）
+#[tauri::command]
+async fn generate_dsa_keypair(key_size: u32, format: String) -> Result<DsaKeyPair, String> {
+    // 在单独的线程中生成密钥对以避免阻塞
+    let result = tokio::task::spawn_blocking(move || {
+        // 根据密钥大小生成密钥对
+        let signing_key = match key_size {
+            1024 => {
+                // DSA 1024 位（已弃用，但仍支持）
+                #[allow(deprecated)]
+                let comp = Components::generate(&mut OsRng, dsa::KeySize::DSA_1024_160).clone();
+                SigningKey::generate(&mut OsRng, comp)
+            },
+            2048 => {
+                // DSA 2048 位
+                let comp = Components::generate(&mut OsRng, dsa::KeySize::DSA_2048_256).clone();
+                SigningKey::generate(&mut OsRng, comp)
+            },
+            3072 => {
+                // DSA 3072 位
+                let comp = Components::generate(&mut OsRng, dsa::KeySize::DSA_3072_256).clone();
+                SigningKey::generate(&mut OsRng, comp)
+            },
+            _ => {
+                return Err(format!("Unsupported key size: {}. Supported sizes: 1024, 2048, 3072", key_size));
+            }
+        };
+        Ok(signing_key)
+    }).await.map_err(|e| format!("Task execution failed: {}", e))?;
+    
+    let signing_key = result?;
+    
+    // 先获取公钥（克隆）
+    let verifying_key = signing_key.verifying_key().clone();
+    
+    // 根据格式导出密钥
+    let (public_key_str, private_key_str) = if format == "pem" {
+        // PEM 格式
+        let public_pem = verifying_key
+            .to_public_key_pem(LineEnding::LF)
+            .map_err(|e| format!("Failed to encode public key to PEM: {}", e))?;
+        
+        let private_pem = signing_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .map_err(|e| format!("Failed to encode private key to PEM: {}", e))?;
+        
+        (public_pem, private_pem.to_string())
+    } else {
+        // DER 格式（十六进制）
+        let public_der = verifying_key
+            .to_public_key_der()
+            .map_err(|e| format!("Failed to encode public key to DER: {}", e))?;
+        
+        let private_der = signing_key
+            .to_pkcs8_der()
+            .map_err(|e| format!("Failed to encode private key to DER: {}", e))?;
+        
+        // 转换为十六进制字符串
+        let public_hex = format_hex(public_der.as_bytes());
+        let private_hex = format_hex(private_der.as_bytes());
+        
+        (public_hex, private_hex)
+    };
+
+    Ok(DsaKeyPair {
+        public_key: public_key_str,
+        private_key: private_key_str,
+        format,
+    })
+}
+
+// 格式化十六进制字符串（每 32 个字符换行）
+fn format_hex(bytes: &[u8]) -> String {
+    let hex: String = bytes.iter()
+        .map(|b| format!("{:02X}", b))
+        .collect();
+    
+    let mut result = String::new();
+    for (i, chunk) in hex.as_bytes().chunks(32).enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        result.push_str(&String::from_utf8_lossy(chunk));
+    }
+    result
+}
+
+// DSA 签名结果
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DsaSignResult {
+    signature: String,
+}
+
+// DSA 验证结果
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DsaVerifyResult {
+    valid: bool,
+}
+
+// DSA 签名
+#[tauri::command]
+fn dsa_sign(private_key_pem: String, message: String) -> Result<DsaSignResult, String> {
+    // 从 PEM 导入私钥
+    let signing_key = SigningKey::from_pkcs8_pem(&private_key_pem)
+        .map_err(|e| format!("Failed to parse private key: {}", e))?;
+    
+    // 计算消息的 SHA-256 哈希
+    let mut hasher = Sha256::new();
+    hasher.update(message.as_bytes());
+    let hash = hasher.finalize();
+    
+    // 签名
+    let signature: Signature = signing_key.sign(&hash);
+    
+    // DSA 签名使用 DER 编码
+    let sig_bytes = signature.to_der()
+        .map_err(|e| format!("Failed to encode signature: {}", e))?;
+    let signature_base64 = general_purpose::STANDARD.encode(&sig_bytes);
+    
+    Ok(DsaSignResult {
+        signature: signature_base64,
+    })
+}
+
+// DSA 验证
+#[tauri::command]
+fn dsa_verify(public_key_pem: String, message: String, signature: String) -> Result<DsaVerifyResult, String> {
+    // 从 PEM 导入公钥
+    let verifying_key = VerifyingKey::from_public_key_pem(&public_key_pem)
+        .map_err(|e| format!("Failed to parse public key: {}", e))?;
+    
+    // 解码签名
+    let signature_bytes = general_purpose::STANDARD.decode(&signature)
+        .map_err(|e| format!("Failed to decode signature: {}", e))?;
+    
+    let sig = Signature::try_from(signature_bytes.as_slice())
+        .map_err(|e| format!("Invalid signature format: {}", e))?;
+    
+    // 计算消息的 SHA-256 哈希
+    let mut hasher = Sha256::new();
+    hasher.update(message.as_bytes());
+    let hash = hasher.finalize();
+    
+    // 验证签名
+    let valid = verifying_key.verify(&hash, &sig).is_ok();
+    
+    Ok(DsaVerifyResult {
+        valid,
+    })
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -153,7 +318,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![greet, http_request])
+        .invoke_handler(tauri::generate_handler![greet, http_request, generate_dsa_keypair, dsa_sign, dsa_verify])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

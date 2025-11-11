@@ -37,6 +37,12 @@
   let fullscreenContainer = $state<HTMLElement | null>(null);
   let isTauri = $state(false);
   let escapeHandler: ((e: KeyboardEvent) => void) | null = null;
+  
+  // 缩放相关状态
+  let zoomLevel = $state(1.0);
+  let minZoom = 0.5;
+  let maxZoom = 5.0;
+  let zoomStep = 0.1;
 
   let translations = $derived($translationsStore);
 
@@ -470,6 +476,52 @@
     }
   });
 
+  // 缩放控制函数
+  function handleZoom(delta: number, container: HTMLElement) {
+    const newZoom = Math.max(minZoom, Math.min(maxZoom, zoomLevel + delta));
+    zoomLevel = newZoom;
+    applyZoom(container);
+    updateZoomDisplay(container);
+  }
+
+  function applyZoom(container: HTMLElement) {
+    const previewContent = container.querySelector('.flex-1, .border, [class*="overflow-auto"]') as HTMLElement;
+    if (!previewContent) return;
+
+    // 查找需要缩放的元素
+    const svgWrapper = previewContent.querySelector('div.max-w-full') as HTMLElement;
+    const mermaidSvg = previewContent.querySelector('svg.mermaid, .mermaid svg, .mermaid') as HTMLElement;
+    const markdownContent = previewContent.querySelector('.markdown-content') as HTMLElement;
+
+    if (svgWrapper) {
+      svgWrapper.style.transform = `scale(${zoomLevel})`;
+      svgWrapper.style.transformOrigin = 'top center';
+    } else if (mermaidSvg) {
+      // Mermaid 使用用户的缩放级别（默认 100%）
+      mermaidSvg.style.transform = `scale(${zoomLevel})`;
+      mermaidSvg.style.transformOrigin = 'top center';
+    } else if (markdownContent) {
+      // Markdown 使用字体大小缩放
+      const baseFontSize = 1.25; // rem
+      markdownContent.style.fontSize = `${baseFontSize * zoomLevel}rem`;
+    }
+  }
+
+  function resetZoom(container: HTMLElement) {
+    zoomLevel = 1.0;
+    applyZoom(container);
+  }
+
+  // 处理鼠标滚轮缩放
+  function handleWheelZoom(e: WheelEvent, container: HTMLElement) {
+    // 只在按住 Ctrl 或 Cmd 键时缩放
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -zoomStep : zoomStep;
+      handleZoom(delta, container);
+    }
+  }
+
   // 检查元素是否处于全屏状态
   function isElementFullscreen(element: HTMLElement | null): boolean {
     if (!element) return false;
@@ -526,6 +578,9 @@
           // 创建并添加退出全屏按钮
           createExitFullscreenButton(container);
           
+          // 创建缩放控制按钮
+          createZoomControls(container);
+          
           // 隐藏标题栏（如果存在）
           const titleBar = container.querySelector('.flex.items-center.justify-between.mb-2, [class*="mb-2"]') as HTMLElement;
           if (titleBar) {
@@ -570,18 +625,31 @@
               (markdownContent as HTMLElement).style.width = '100%';
             }
             
-            // Mermaid 内容 - 保持原始大小，让其自适应
+            // Mermaid 内容 - 保持原始大小（100%）
             const mermaidSvg = previewContent.querySelector('svg.mermaid, .mermaid svg, .mermaid');
             if (mermaidSvg) {
               (mermaidSvg as HTMLElement).setAttribute('data-original-style', (mermaidSvg as HTMLElement).getAttribute('style') || '');
               if (mermaidSvg.tagName === 'SVG') {
+                // 保持原始大小，让用户通过缩放控制调整
                 (mermaidSvg as HTMLElement).style.maxWidth = '100%';
                 (mermaidSvg as HTMLElement).style.maxHeight = '100%';
-                (mermaidSvg as HTMLElement).style.width = 'auto';
-                (mermaidSvg as HTMLElement).style.height = 'auto';
               }
             }
           }
+          
+          // 设置默认缩放级别为 120%
+          zoomLevel = 1.2;
+          
+          // 应用初始缩放
+          setTimeout(() => {
+            applyZoom(container);
+            updateZoomDisplay(container);
+          }, 50);
+          
+          // 添加滚轮缩放监听
+          const wheelHandler = (e: WheelEvent) => handleWheelZoom(e, container);
+          previewContent.addEventListener('wheel', wheelHandler, { passive: false });
+          container.setAttribute('data-wheel-handler', 'attached');
           
           // 添加 ESC 键监听
           escapeHandler = (e: KeyboardEvent) => {
@@ -657,6 +725,20 @@
               (mermaidSvg as HTMLElement).removeAttribute('data-original-style');
             }
           }
+          
+          // 移除滚轮缩放监听
+          if (previewContent && container.hasAttribute('data-wheel-handler')) {
+            // 移除所有 wheel 事件监听器（通过克隆节点）
+            const newPreviewContent = previewContent.cloneNode(true) as HTMLElement;
+            previewContent.parentNode?.replaceChild(newPreviewContent, previewContent);
+            container.removeAttribute('data-wheel-handler');
+          }
+          
+          // 重置缩放级别
+          zoomLevel = 1.0;
+          
+          // 移除缩放控制按钮
+          removeZoomControls(container);
           
           // 移除退出全屏按钮
           removeExitFullscreenButton(container);
@@ -757,10 +839,98 @@
     }
   }
 
+  // 创建缩放控制按钮
+  function createZoomControls(container: HTMLElement) {
+    // 检查是否已存在缩放控制
+    const existingControls = container.querySelector('.zoom-controls') || document.querySelector('.zoom-controls');
+    if (existingControls) {
+      return;
+    }
+    
+    const controlsDiv = document.createElement('div');
+    controlsDiv.className = 'zoom-controls fixed bottom-4 right-4 z-[10000] flex flex-col gap-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-2';
+    
+    // 放大按钮
+    const zoomInBtn = document.createElement('button');
+    zoomInBtn.className = 'btn-secondary text-xs p-2 hover:bg-gray-100 dark:hover:bg-gray-700';
+    zoomInBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`;
+    zoomInBtn.title = 'Zoom In (Ctrl + Scroll)';
+    zoomInBtn.onclick = (e) => {
+      e.stopPropagation();
+      handleZoom(zoomStep, container);
+    };
+    
+    // 缩放级别显示
+    const zoomDisplay = document.createElement('div');
+    zoomDisplay.className = 'zoom-display text-xs text-center text-gray-700 dark:text-gray-300 font-mono px-2 py-1';
+    zoomDisplay.textContent = `${Math.round(zoomLevel * 100)}%`;
+    
+    // 缩小按钮
+    const zoomOutBtn = document.createElement('button');
+    zoomOutBtn.className = 'btn-secondary text-xs p-2 hover:bg-gray-100 dark:hover:bg-gray-700';
+    zoomOutBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`;
+    zoomOutBtn.title = 'Zoom Out (Ctrl + Scroll)';
+    zoomOutBtn.onclick = (e) => {
+      e.stopPropagation();
+      handleZoom(-zoomStep, container);
+    };
+    
+    // 重置按钮
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'btn-secondary text-xs p-2 hover:bg-gray-100 dark:hover:bg-gray-700';
+    resetBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`;
+    resetBtn.title = 'Reset Zoom (100%)';
+    resetBtn.onclick = (e) => {
+      e.stopPropagation();
+      resetZoom(container);
+      updateZoomDisplay(container);
+    };
+    
+    controlsDiv.appendChild(zoomInBtn);
+    controlsDiv.appendChild(zoomDisplay);
+    controlsDiv.appendChild(zoomOutBtn);
+    controlsDiv.appendChild(resetBtn);
+    
+    // 添加到容器
+    if (isTauri) {
+      container.appendChild(controlsDiv);
+    } else {
+      const fullscreenEl = 
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement ||
+        (document as any).msFullscreenElement;
+      if (fullscreenEl) {
+        (fullscreenEl as HTMLElement).appendChild(controlsDiv);
+      } else {
+        container.appendChild(controlsDiv);
+      }
+    }
+  }
+
+  // 移除缩放控制按钮
+  function removeZoomControls(container: HTMLElement) {
+    const controls = container.querySelector('.zoom-controls') || document.querySelector('.zoom-controls');
+    if (controls) {
+      controls.remove();
+    }
+  }
+
+  // 更新缩放显示
+  function updateZoomDisplay(container: HTMLElement) {
+    const display = container.querySelector('.zoom-display') || document.querySelector('.zoom-display');
+    if (display) {
+      display.textContent = `${Math.round(zoomLevel * 100)}%`;
+    }
+  }
+
   // 准备全屏内容（浏览器环境）
   function prepareFullscreenContent(container: HTMLElement) {
     // 创建并添加退出全屏按钮
     createExitFullscreenButton(container);
+    
+    // 创建缩放控制按钮
+    createZoomControls(container);
     
     // 隐藏标题栏
     const titleBar = container.querySelector('.flex.items-center.justify-between.mb-2, [class*="mb-2"]') as HTMLElement;
@@ -791,6 +961,20 @@
         previewContent.scrollTop = 0;
       }, 0);
       
+      // 设置默认缩放级别为 120%
+      zoomLevel = 1.2;
+      
+      // 应用初始缩放
+      setTimeout(() => {
+        applyZoom(container);
+        updateZoomDisplay(container);
+      }, 50);
+      
+      // 添加滚轮缩放监听
+      const wheelHandler = (e: WheelEvent) => handleWheelZoom(e, container);
+      previewContent.addEventListener('wheel', wheelHandler, { passive: false });
+      container.setAttribute('data-wheel-handler', 'attached');
+      
       // Markdown 内容 - 增大字体和宽度
       const markdownContent = previewContent.querySelector('.markdown-content');
       if (markdownContent) {
@@ -801,15 +985,14 @@
         (markdownContent as HTMLElement).style.width = '100%';
       }
       
-      // Mermaid 内容 - 保持原始大小，让其自适应
+      // Mermaid 内容 - 保持原始大小（100%）
       const mermaidSvg = previewContent.querySelector('svg.mermaid, .mermaid svg, .mermaid');
       if (mermaidSvg) {
         (mermaidSvg as HTMLElement).setAttribute('data-original-style', (mermaidSvg as HTMLElement).getAttribute('style') || '');
         if (mermaidSvg.tagName === 'SVG') {
+          // 保持原始大小，让用户通过缩放控制调整
           (mermaidSvg as HTMLElement).style.maxWidth = '100%';
           (mermaidSvg as HTMLElement).style.maxHeight = '100%';
-          (mermaidSvg as HTMLElement).style.width = 'auto';
-          (mermaidSvg as HTMLElement).style.height = 'auto';
         }
       }
     }
@@ -817,6 +1000,23 @@
 
   // 恢复全屏内容（浏览器环境）
   function restoreFullscreenContent(container: HTMLElement) {
+    // 移除滚轮缩放监听和恢复预览内容区域
+    let previewContent = container.querySelector('.flex-1, .border, [class*="overflow-auto"]') as HTMLElement;
+    if (previewContent && container.hasAttribute('data-wheel-handler')) {
+      // 移除所有 wheel 事件监听器（通过克隆节点）
+      const newPreviewContent = previewContent.cloneNode(true) as HTMLElement;
+      previewContent.parentNode?.replaceChild(newPreviewContent, previewContent);
+      container.removeAttribute('data-wheel-handler');
+      // 更新引用
+      previewContent = newPreviewContent;
+    }
+    
+    // 重置缩放级别
+    zoomLevel = 1.0;
+    
+    // 移除缩放控制按钮
+    removeZoomControls(container);
+    
     // 移除退出全屏按钮
     removeExitFullscreenButton(container);
     
@@ -833,7 +1033,6 @@
     }
     
     // 恢复预览内容区域的原始样式
-    const previewContent = container.querySelector('.flex-1, .border, [class*="overflow-auto"]') as HTMLElement;
     if (previewContent) {
       const originalPreviewStyle = previewContent.getAttribute('data-original-style');
       if (originalPreviewStyle) {

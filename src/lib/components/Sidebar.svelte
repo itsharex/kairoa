@@ -27,7 +27,7 @@
       icon: Lock, 
       key: 'nav.crypto',
       subItems: [
-        { label: 'RSA 密钥对', key: 'rsa.title', type: 'rsa' },
+        { label: '密钥生成器', key: 'crypto.keyGenerator', type: 'keygen' },
         { label: '非对称算法', key: 'crypto.asymmetric.title', type: 'asymmetric' },
         { label: '对称算法', key: 'crypto.symmetric.title', type: 'symmetric' }
       ]

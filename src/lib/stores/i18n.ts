@@ -20,7 +20,6 @@ const translations = {
       color: 'Color Converter',
       baseConverter: 'Base Converter',
       crypto: 'Crypto',
-      rsa: 'RSA Key Pair Generator',
       jwt: 'JWT Decoder',
       textDiff: 'Text Diff',
       previewer: 'Previewer',
@@ -227,21 +226,33 @@ const translations = {
       numbers: 'Numbers',
       punctuation: 'Punctuation'
     },
-    rsa: {
-      title: 'RSA Key Pair Generator',
+    keyGenerator: {
+      title: 'Asymmetric Key Generator',
+      algorithm: 'Algorithm',
       keySize: 'Key Size',
-      keySizeDescription: 'Larger key sizes provide better security but take longer to generate',
       keyFormat: 'Key Format',
-      keyFormatDescription: 'PEM format is human-readable, DER format is binary (shown as hex)',
       generate: 'Generate Key Pair',
       generating: 'Generating...',
       clear: 'Clear',
       publicKey: 'Public Key',
       privateKey: 'Private Key',
       warning: 'Warning:',
-      warningDescription: 'Keep your private key secure and never share it with anyone. The private key is sensitive information that should be protected.'
+      warningDescription: 'Keep your private key secure and never share it with anyone. The private key is sensitive information that should be protected.',
+      rsaDescription: 'RSA: Encryption/Decryption and Digital Signatures',
+      dsaDescription: 'DSA: Digital Signatures Only (requires desktop app)',
+      ecdsaDescription: 'ECDSA: Elliptic Curve Digital Signatures',
+      ecdhDescription: 'ECDH: Elliptic Curve Key Exchange',
+      curve: 'Curve',
+      tauriRequired: 'Desktop App Required',
+      tauriRequiredDescription: 'DSA key generation requires the desktop application (Tauri environment). This feature is not available in the browser.',
+      dsaGenerating: 'Generating DSA key pair... This may take 10-30 seconds depending on key size. Please wait.',
+      deprecated: 'Deprecated',
+      recommended: 'Recommended',
+      slower: 'Slower',
+      dsaKeySizeHint: '2048 bits offers a good balance of security and generation speed. 3072 bits may take 20-30 seconds to generate.'
     },
     crypto: {
+      keyGenerator: 'Key Generator',
       asymmetric: {
         title: 'Asymmetric Algorithm',
         algorithm: 'Algorithm',
@@ -277,7 +288,15 @@ const translations = {
         invalidFormat: 'Invalid format. Expected: message|signature',
         verificationSuccess: '✓ Signature is valid',
         verificationFailed: '✗ Signature is invalid',
-        dsaNotSupported: 'DSA is not supported by Web Crypto API. Please use ECDSA or RSA-PSS for digital signatures.'
+        dsaNotSupported: 'DSA is not supported by Web Crypto API. Please use ECDSA or RSA-PSS for digital signatures.',
+        dsaTauriRequired: 'DSA requires the desktop app (Tauri environment). This feature is not available in the browser.',
+        signatureValid: '✓ Signature is valid',
+        signatureInvalid: '✗ Signature is invalid',
+        messageRequired: 'Message is required',
+        messageAndSignatureRequired: 'Message and signature are required (format: message|signature)',
+        invalidMessageSignatureFormat: 'Invalid format. Expected: message|signature',
+        dsaInfo: 'Note:',
+        dsaInfoDescription: 'DSA only supports digital signatures (sign/verify), not encryption. Messages are automatically hashed with SHA-256 before signing. No length limit on input messages.'
       },
       symmetric: {
         title: 'Symmetric Algorithm',
@@ -410,7 +429,6 @@ const translations = {
       color: '颜色转换',
       baseConverter: '进制转换',
       crypto: '加解密',
-      rsa: 'RSA 密钥对生成器',
       jwt: 'JWT 解码器',
       textDiff: '文本差异对比',
       previewer: '预览器',
@@ -617,21 +635,33 @@ const translations = {
       numbers: '数字',
       punctuation: '标点符号'
     },
-    rsa: {
-      title: 'RSA 密钥对生成器',
+    keyGenerator: {
+      title: '非对称密钥生成器',
+      algorithm: '算法',
       keySize: '密钥长度',
-      keySizeDescription: '更大的密钥长度提供更好的安全性，但生成时间更长',
       keyFormat: '密钥格式',
-      keyFormatDescription: 'PEM 格式可读性强，DER 格式为二进制（显示为十六进制）',
       generate: '生成密钥对',
       generating: '生成中...',
       clear: '清空',
       publicKey: '公钥',
       privateKey: '私钥',
       warning: '警告：',
-      warningDescription: '请妥善保管您的私钥，不要与任何人分享。私钥是敏感信息，应该受到保护。'
+      warningDescription: '请妥善保管您的私钥，不要与任何人分享。私钥是敏感信息，应该受到保护。',
+      rsaDescription: 'RSA：加密/解密和数字签名',
+      dsaDescription: 'DSA：仅数字签名（需要桌面应用）',
+      ecdsaDescription: 'ECDSA：椭圆曲线数字签名',
+      ecdhDescription: 'ECDH：椭圆曲线密钥交换',
+      curve: '曲线',
+      tauriRequired: '需要桌面应用',
+      tauriRequiredDescription: 'DSA 密钥生成需要桌面应用程序（Tauri 环境）。此功能在浏览器中不可用。',
+      dsaGenerating: '正在生成 DSA 密钥对... 根据密钥长度，这可能需要 10-30 秒。请耐心等待。',
+      deprecated: '已弃用',
+      recommended: '推荐',
+      slower: '较慢',
+      dsaKeySizeHint: '2048 位提供良好的安全性和生成速度平衡。3072 位生成时间可能需要 20-30 秒。'
     },
     crypto: {
+      keyGenerator: '密钥生成器',
       asymmetric: {
         title: '非对称算法',
         algorithm: '算法',
@@ -667,7 +697,15 @@ const translations = {
         invalidFormat: '格式无效。期望格式：消息|签名',
         verificationSuccess: '✓ 签名有效',
         verificationFailed: '✗ 签名无效',
-        dsaNotSupported: 'DSA 不受 Web Crypto API 支持。请使用 ECDSA 或 RSA-PSS 进行数字签名。'
+        dsaNotSupported: 'DSA 不受 Web Crypto API 支持。请使用 ECDSA 或 RSA-PSS 进行数字签名。',
+        dsaTauriRequired: 'DSA 需要桌面应用程序（Tauri 环境）。此功能在浏览器中不可用。',
+        signatureValid: '✓ 签名有效',
+        signatureInvalid: '✗ 签名无效',
+        messageRequired: '需要输入消息',
+        messageAndSignatureRequired: '需要输入消息和签名（格式：消息|签名）',
+        invalidMessageSignatureFormat: '格式无效。期望格式：消息|签名',
+        dsaInfo: '注意：',
+        dsaInfoDescription: 'DSA 仅支持数字签名（签名/验证），不支持加密。消息会自动使用 SHA-256 哈希后再签名。输入消息无长度限制。'
       },
       symmetric: {
         title: '对称算法',

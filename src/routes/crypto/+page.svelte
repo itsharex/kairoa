@@ -3,16 +3,35 @@
   import { Check, Copy } from 'lucide-svelte';
   import { page } from '$app/stores';
   import CryptoJS from 'crypto-js';
+  import { browser } from '$app/environment';
   
-  type CryptoType = 'rsa' | 'asymmetric' | 'symmetric';
+  // 动态导入 Tauri API
+  let invokeFn: ((cmd: string, args?: any) => Promise<any>) | null = $state(null);
+  let isTauriAvailable = $state(false);
   
-  let cryptoType = $state<CryptoType>('rsa');
+  if (browser) {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      isTauriAvailable = true;
+      import('@tauri-apps/api/core')
+        .then((module) => {
+          invokeFn = module.invoke;
+        })
+        .catch((err) => {
+          console.error('Failed to load Tauri API:', err);
+          isTauriAvailable = false;
+        });
+    }
+  }
+  
+  type CryptoType = 'keygen' | 'asymmetric' | 'symmetric';
+  
+  let cryptoType = $state<CryptoType>('keygen');
   
   // Check URL parameter for type
   $effect(() => {
     const typeParam = $page.url.searchParams.get('type');
-    if (typeParam === 'rsa') {
-      cryptoType = 'rsa';
+    if (typeParam === 'keygen') {
+      cryptoType = 'keygen';
     } else if (typeParam === 'asymmetric') {
       cryptoType = 'asymmetric';
     } else if (typeParam === 'symmetric') {
@@ -20,17 +39,24 @@
     }
   });
   
-  // RSA specific state
+  // Key Generator state
+  type KeyGenAlgorithm = 'RSA' | 'DSA' | 'ECDSA' | 'ECDH';
   type KeySize = 1024 | 2048 | 3072 | 4096;
+  type DsaKeySize = 1024 | 2048 | 3072;
   type KeyFormat = 'pem' | 'der';
+  type EcCurve = 'P-256' | 'P-384' | 'P-521';
   
+  let keyGenAlgorithm = $state<KeyGenAlgorithm>('RSA');
   let keySize = $state<KeySize>(2048);
+  let dsaKeySize = $state<DsaKeySize>(2048);
+  let ecCurve = $state<EcCurve>('P-256');
   let keyFormat = $state<KeyFormat>('pem');
   let publicKey = $state('');
   let privateKey = $state('');
   let isGenerating = $state(false);
   let publicKeyCopied = $state(false);
   let privateKeyCopied = $state(false);
+  let keyGenError = $state('');
   
   // Symmetric algorithm state
   type SymmetricAlgorithm = 'AES' | 'DES' | '3DES' | 'Rabbit' | 'RC2' | 'RC4';
@@ -76,12 +102,13 @@
 
   function switchCryptoType(type: CryptoType) {
     cryptoType = type;
-    // Reset RSA state
-    if (type === 'rsa') {
+    // Reset Key Generator state
+    if (type === 'keygen') {
       publicKey = '';
       privateKey = '';
       publicKeyCopied = false;
       privateKeyCopied = false;
+      keyGenError = '';
     }
     // Reset asymmetric state
     if (type === 'asymmetric') {
@@ -192,30 +219,79 @@
     privateKey = '';
     publicKeyCopied = false;
     privateKeyCopied = false;
+    keyGenError = '';
 
     try {
-      // 生成 RSA 密钥对
-      const keyPair = await crypto.subtle.generateKey(
-        {
-          name: 'RSA-OAEP',
-          modulusLength: keySize,
-          publicExponent: new Uint8Array([1, 0, 1]), // 65537
-          hash: 'SHA-256',
-        },
-        true, // 可导出
-        ['encrypt', 'decrypt']
-      );
-
-      // 导出密钥对
-      publicKey = await exportPublicKey(keyPair.publicKey, keyFormat);
-      privateKey = await exportPrivateKey(keyPair.privateKey, keyFormat);
+      if (keyGenAlgorithm === 'RSA') {
+        await generateRSAKeyPair();
+      } else if (keyGenAlgorithm === 'DSA') {
+        await generateDSAKeyPair();
+      } else if (keyGenAlgorithm === 'ECDSA') {
+        await generateECDSAKeyPair();
+      } else if (keyGenAlgorithm === 'ECDH') {
+        await generateECDHKeyPair();
+      }
     } catch (error) {
       console.error('Error generating key pair:', error);
-      publicKey = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      privateKey = '';
+      keyGenError = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
     } finally {
       isGenerating = false;
     }
+  }
+
+  async function generateRSAKeyPair() {
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: 'RSA-OAEP',
+        modulusLength: keySize,
+        publicExponent: new Uint8Array([1, 0, 1]), // 65537
+        hash: 'SHA-256',
+      },
+      true,
+      ['encrypt', 'decrypt']
+    );
+    publicKey = await exportPublicKey(keyPair.publicKey, keyFormat);
+    privateKey = await exportPrivateKey(keyPair.privateKey, keyFormat);
+  }
+
+  async function generateDSAKeyPair() {
+    if (!isTauriAvailable || !invokeFn) {
+      keyGenError = t('keyGenerator.tauriRequired');
+      return;
+    }
+    
+    const result = await invokeFn('generate_dsa_keypair', {
+      keySize: dsaKeySize,
+      format: keyFormat
+    });
+    publicKey = result.public_key;
+    privateKey = result.private_key;
+  }
+
+  async function generateECDSAKeyPair() {
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: 'ECDSA',
+        namedCurve: ecCurve,
+      },
+      true,
+      ['sign', 'verify']
+    );
+    publicKey = await exportPublicKey(keyPair.publicKey, keyFormat);
+    privateKey = await exportPrivateKey(keyPair.privateKey, keyFormat);
+  }
+
+  async function generateECDHKeyPair() {
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: 'ECDH',
+        namedCurve: ecCurve,
+      },
+      true,
+      ['deriveKey', 'deriveBits']
+    );
+    publicKey = await exportPublicKey(keyPair.publicKey, keyFormat);
+    privateKey = await exportPrivateKey(keyPair.privateKey, keyFormat);
   }
 
   async function copyToClipboard(text: string, type: 'public' | 'private') {
@@ -237,11 +313,12 @@
     }
   }
 
-  function clearRSA() {
+  function clearKeyGen() {
     publicKey = '';
     privateKey = '';
     publicKeyCopied = false;
     privateKeyCopied = false;
+    keyGenError = '';
   }
   
   // PEM to ArrayBuffer (extract base64 content)
@@ -651,6 +728,83 @@
     }
   }
   
+  // DSA Sign
+  async function signDSA() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!isTauriAvailable || !invokeFn) {
+      asymmetricError = t('crypto.asymmetric.dsaTauriRequired');
+      return;
+    }
+    
+    if (!asymmetricPrivateKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.privateKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.messageRequired');
+      return;
+    }
+    
+    try {
+      const result = await invokeFn('dsa_sign', {
+        privateKeyPem: asymmetricPrivateKey,
+        message: asymmetricInput
+      });
+      
+      // 输出格式：message|signature
+      asymmetricOutput = `${asymmetricInput}|${result.signature}`;
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  
+  // DSA Verify
+  async function verifyDSA() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!isTauriAvailable || !invokeFn) {
+      asymmetricError = t('crypto.asymmetric.dsaTauriRequired');
+      return;
+    }
+    
+    if (!asymmetricPublicKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.publicKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.messageAndSignatureRequired');
+      return;
+    }
+    
+    try {
+      // Parse message|signature format
+      const parts = asymmetricInput.split('|');
+      if (parts.length !== 2) {
+        asymmetricError = t('crypto.asymmetric.invalidMessageSignatureFormat');
+        return;
+      }
+      
+      const [message, signature] = parts;
+      
+      const result = await invokeFn('dsa_verify', {
+        publicKeyPem: asymmetricPublicKey,
+        message: message,
+        signature: signature
+      });
+      
+      asymmetricOutput = result.valid 
+        ? t('crypto.asymmetric.signatureValid')
+        : t('crypto.asymmetric.signatureInvalid');
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  
   // Execute asymmetric operation
   async function executeAsymmetricOperation() {
     if (asymmetricAlgorithm === 'RSA-OAEP') {
@@ -676,7 +830,11 @@
         await exchangeECDH();
       }
     } else if (asymmetricAlgorithm === 'DSA') {
-      asymmetricError = t('crypto.asymmetric.dsaNotSupported');
+      if (asymmetricOperation === 'sign') {
+        await signDSA();
+      } else if (asymmetricOperation === 'verify') {
+        await verifyDSA();
+      }
     }
   }
   
@@ -1323,13 +1481,13 @@
       <div class="border-b border-gray-200 dark:border-gray-700">
         <div class="flex gap-6">
           <button
-            onclick={() => switchCryptoType('rsa')}
-            class="px-4 py-2 relative transition-colors font-medium {cryptoType === 'rsa'
+            onclick={() => switchCryptoType('keygen')}
+            class="px-4 py-2 relative transition-colors font-medium {cryptoType === 'keygen'
               ? 'text-primary-600 dark:text-primary-400'
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
           >
-            {t('rsa.title')}
-            {#if cryptoType === 'rsa'}
+            {t('keyGenerator.title')}
+            {#if cryptoType === 'keygen'}
               <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-600 dark:text-primary-400"></span>
             {/if}
           </button>
@@ -1358,35 +1516,94 @@
         </div>
       </div>
 
-      <!-- RSA Key Pair Generator -->
-      {#if cryptoType === 'rsa'}
+      <!-- Asymmetric Key Generator -->
+      {#if cryptoType === 'keygen'}
         <div class="flex-1 flex flex-col space-y-6 min-h-0 overflow-y-auto">
           <!-- 配置区域 -->
           <div class="flex-shrink-0">
             <div class="space-y-4">
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label for="key-size" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
-                    {t('rsa.keySize')}
+                  <label for="keygen-algorithm" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('keyGenerator.algorithm')}
                   </label>
                   <select
-                    id="key-size"
-                    bind:value={keySize}
+                    id="keygen-algorithm"
+                    bind:value={keyGenAlgorithm}
                     class="input w-full"
                   >
-                    <option value={1024}>1024 bits</option>
-                    <option value={2048}>2048 bits</option>
-                    <option value={3072}>3072 bits</option>
-                    <option value={4096}>4096 bits</option>
+                    <option value="RSA">RSA</option>
+                    <option value="DSA">DSA</option>
+                    <option value="ECDSA">ECDSA</option>
+                    <option value="ECDH">ECDH</option>
                   </select>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {t('rsa.keySizeDescription')}
+                    {#if keyGenAlgorithm === 'RSA'}
+                      {t('keyGenerator.rsaDescription')}
+                    {:else if keyGenAlgorithm === 'DSA'}
+                      {t('keyGenerator.dsaDescription')}
+                    {:else if keyGenAlgorithm === 'ECDSA'}
+                      {t('keyGenerator.ecdsaDescription')}
+                    {:else if keyGenAlgorithm === 'ECDH'}
+                      {t('keyGenerator.ecdhDescription')}
+                    {/if}
                   </p>
                 </div>
 
+                {#if keyGenAlgorithm === 'RSA'}
+                  <div>
+                    <label for="key-size" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                      {t('keyGenerator.keySize')}
+                    </label>
+                    <select
+                      id="key-size"
+                      bind:value={keySize}
+                      class="input w-full"
+                    >
+                      <option value={1024}>1024 bits</option>
+                      <option value={2048}>2048 bits</option>
+                      <option value={3072}>3072 bits</option>
+                      <option value={4096}>4096 bits</option>
+                    </select>
+                  </div>
+                {:else if keyGenAlgorithm === 'DSA'}
+                  <div>
+                    <label for="dsa-key-size" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                      {t('keyGenerator.keySize')}
+                    </label>
+                    <select
+                      id="dsa-key-size"
+                      bind:value={dsaKeySize}
+                      class="input w-full"
+                    >
+                      <option value={1024}>1024 bits (L=1024, N=160) - {t('keyGenerator.deprecated')}</option>
+                      <option value={2048}>2048 bits (L=2048, N=256) - {t('keyGenerator.recommended')}</option>
+                      <option value={3072}>3072 bits (L=3072, N=256) - {t('keyGenerator.slower')}</option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {t('keyGenerator.dsaKeySizeHint')}
+                    </p>
+                  </div>
+                {:else if keyGenAlgorithm === 'ECDSA' || keyGenAlgorithm === 'ECDH'}
+                  <div>
+                    <label for="ec-curve" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                      {t('keyGenerator.curve')}
+                    </label>
+                    <select
+                      id="ec-curve"
+                      bind:value={ecCurve}
+                      class="input w-full"
+                    >
+                      <option value="P-256">P-256 (256 bits)</option>
+                      <option value="P-384">P-384 (384 bits)</option>
+                      <option value="P-521">P-521 (521 bits)</option>
+                    </select>
+                  </div>
+                {/if}
+
                 <div>
                   <label for="key-format" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
-                    {t('rsa.keyFormat')}
+                    {t('keyGenerator.keyFormat')}
                   </label>
                   <select
                     id="key-format"
@@ -1396,33 +1613,57 @@
                     <option value="pem">PEM</option>
                     <option value="der">DER (Hex)</option>
                   </select>
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {t('rsa.keyFormatDescription')}
-                  </p>
                 </div>
               </div>
+
+              {#if keyGenAlgorithm === 'DSA' && !isTauriAvailable}
+                <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+                  <p class="text-sm text-yellow-800 dark:text-yellow-200">
+                    <strong>{t('keyGenerator.tauriRequired')}</strong> {t('keyGenerator.tauriRequiredDescription')}
+                  </p>
+                </div>
+              {/if}
+
+              {#if isGenerating && keyGenAlgorithm === 'DSA'}
+                <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+                  <div class="flex items-center gap-2">
+                    <div class="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent"></div>
+                    <p class="text-sm text-blue-800 dark:text-blue-200">
+                      {t('keyGenerator.dsaGenerating')}
+                    </p>
+                  </div>
+                </div>
+              {/if}
 
               <div class="flex gap-2">
                 <button
                   onclick={generateKeyPair}
-                  disabled={isGenerating}
+                  disabled={isGenerating || (keyGenAlgorithm === 'DSA' && !isTauriAvailable)}
                   class="px-4 py-2 text-white rounded-lg transition-colors font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                   style="background-color: #818089;"
                 >
                   {#if isGenerating}
-                    {t('rsa.generating')}
+                    {t('keyGenerator.generating')}
                   {:else}
-                    {t('rsa.generate')}
+                    {t('keyGenerator.generate')}
                   {/if}
                 </button>
                 <button
-                  onclick={clearRSA}
+                  onclick={clearKeyGen}
                   disabled={isGenerating}
                   class="btn-secondary"
                 >
-                  {t('rsa.clear')}
+                  {t('keyGenerator.clear')}
                 </button>
               </div>
+
+              {#if keyGenError}
+                <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                  <p class="text-sm text-red-800 dark:text-red-200">
+                    <strong>{t('common.error')}:</strong> {keyGenError}
+                  </p>
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -1432,7 +1673,7 @@
               <div class="space-y-4">
                 <div class="flex items-center justify-between">
                   <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                    {t('rsa.publicKey')}
+                    {t('keyGenerator.publicKey')}
                   </h3>
                   <button
                     onclick={() => copyToClipboard(publicKey, 'public')}
@@ -1467,7 +1708,7 @@
               <div class="space-y-4">
                 <div class="flex items-center justify-between">
                   <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                    {t('rsa.privateKey')}
+                    {t('keyGenerator.privateKey')}
                   </h3>
                   <button
                     onclick={() => copyToClipboard(privateKey, 'private')}
@@ -1489,7 +1730,7 @@
 
                 <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 mb-2">
                   <p class="text-sm text-yellow-800 dark:text-yellow-200">
-                    <strong>{t('rsa.warning')}</strong> {t('rsa.warningDescription')}
+                    <strong>{t('keyGenerator.warning')}</strong> {t('keyGenerator.warningDescription')}
                   </p>
                 </div>
 
@@ -1519,7 +1760,7 @@
               <option value="RSA-PSS">RSA-PSS (Sign/Verify)</option>
               <option value="ECDSA">ECDSA (Sign/Verify)</option>
               <option value="ECDH">ECDH (Key Exchange)</option>
-              <option value="DSA">DSA (Not Supported)</option>
+              <option value="DSA">DSA (Sign/Verify)</option>
             </select>
           </div>
 
@@ -1560,8 +1801,8 @@
               {:else if asymmetricAlgorithm === 'ECDH'}
                 <option value="keyExchange">{t('crypto.asymmetric.keyExchange')}</option>
               {:else if asymmetricAlgorithm === 'DSA'}
-                <option value="sign" disabled>{t('crypto.asymmetric.sign')}</option>
-                <option value="verify" disabled>{t('crypto.asymmetric.verify')}</option>
+                <option value="sign">{t('crypto.asymmetric.sign')}</option>
+                <option value="verify">{t('crypto.asymmetric.verify')}</option>
               {/if}
             </select>
           </div>
@@ -1649,14 +1890,52 @@
                 ></textarea>
               </div>
             {:else if asymmetricAlgorithm === 'DSA'}
-              <!-- DSA not supported message -->
+              <!-- DSA Info -->
               <div class="col-span-2">
-                <div class="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                  <p class="text-sm text-yellow-800 dark:text-yellow-200">
-                    {t('crypto.asymmetric.dsaNotSupported')}
+                <div class="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                  <p class="text-sm text-blue-800 dark:text-blue-200">
+                    <strong>{t('crypto.asymmetric.dsaInfo')}</strong> {t('crypto.asymmetric.dsaInfoDescription')}
                   </p>
                 </div>
               </div>
+              
+              {#if asymmetricOperation === 'sign'}
+                <!-- Private key for signing -->
+                <div>
+                  <label for="dsa-private-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.asymmetric.privateKey')}
+                  </label>
+                  <textarea
+                    id="dsa-private-key"
+                    bind:value={asymmetricPrivateKey}
+                    placeholder={t('crypto.asymmetric.privateKeyPlaceholder')}
+                    class="textarea font-mono text-sm min-h-[120px]"
+                  ></textarea>
+                </div>
+              {:else if asymmetricOperation === 'verify'}
+                <!-- Public key for verification -->
+                <div>
+                  <label for="dsa-public-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.asymmetric.publicKey')}
+                  </label>
+                  <textarea
+                    id="dsa-public-key"
+                    bind:value={asymmetricPublicKey}
+                    placeholder={t('crypto.asymmetric.publicKeyPlaceholder')}
+                    class="textarea font-mono text-sm min-h-[120px]"
+                  ></textarea>
+                </div>
+              {/if}
+              
+              {#if !isTauriAvailable}
+                <div class="col-span-2">
+                  <div class="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                    <p class="text-sm text-yellow-800 dark:text-yellow-200">
+                      {t('crypto.asymmetric.dsaTauriRequired')}
+                    </p>
+                  </div>
+                </div>
+              {/if}
             {/if}
           </div>
 
@@ -1666,16 +1945,14 @@
               onclick={executeAsymmetricOperation}
               class="px-4 py-2 text-white rounded-lg transition-colors font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
               style="background-color: #818089;"
-              disabled={asymmetricAlgorithm === 'DSA'}
+              disabled={asymmetricAlgorithm === 'DSA' && !isTauriAvailable}
             >
               {#if asymmetricAlgorithm === 'RSA-OAEP'}
                 {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.encrypt') : t('crypto.asymmetric.decrypt')}
-              {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA'}
+              {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA'}
                 {asymmetricOperation === 'sign' ? t('crypto.asymmetric.sign') : t('crypto.asymmetric.verify')}
               {:else if asymmetricAlgorithm === 'ECDH'}
                 {t('crypto.asymmetric.keyExchange')}
-              {:else if asymmetricAlgorithm === 'DSA'}
-                {t('crypto.asymmetric.notSupported')}
               {/if}
             </button>
             <button
@@ -1701,11 +1978,9 @@
                 <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   {#if asymmetricAlgorithm === 'RSA-OAEP'}
                     {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.plaintext') : t('crypto.asymmetric.ciphertext')}
-                  {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA'}
+                  {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA'}
                     {asymmetricOperation === 'sign' ? t('crypto.asymmetric.message') : t('crypto.asymmetric.messageAndSignature')}
                   {:else if asymmetricAlgorithm === 'ECDH'}
-                    {t('crypto.asymmetric.notApplicable')}
-                  {:else if asymmetricAlgorithm === 'DSA'}
                     {t('crypto.asymmetric.notApplicable')}
                   {/if}
                 </span>
@@ -1713,13 +1988,13 @@
               </div>
               <textarea
                 bind:value={asymmetricInput}
-                placeholder={asymmetricAlgorithm === 'ECDH' || asymmetricAlgorithm === 'DSA'
+                placeholder={asymmetricAlgorithm === 'ECDH'
                   ? t('crypto.asymmetric.notApplicable')
-                  : (asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA') && asymmetricOperation === 'verify' 
+                  : (asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA') && asymmetricOperation === 'verify' 
                     ? t('crypto.asymmetric.messageAndSignaturePlaceholder')
                     : t('crypto.asymmetric.inputPlaceholder')}
                 class="textarea font-mono text-sm flex-1 resize-none"
-                disabled={asymmetricAlgorithm === 'ECDH' || asymmetricAlgorithm === 'DSA'}
+                disabled={asymmetricAlgorithm === 'ECDH'}
               ></textarea>
             </div>
 
@@ -1729,12 +2004,10 @@
                 <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   {#if asymmetricAlgorithm === 'RSA-OAEP'}
                     {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.ciphertext') : t('crypto.asymmetric.plaintext')}
-                  {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA'}
+                  {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA'}
                     {asymmetricOperation === 'sign' ? t('crypto.asymmetric.signature') : t('crypto.asymmetric.verificationResult')}
                   {:else if asymmetricAlgorithm === 'ECDH'}
                     {t('crypto.asymmetric.sharedSecret')}
-                  {:else if asymmetricAlgorithm === 'DSA'}
-                    {t('crypto.asymmetric.notApplicable')}
                   {/if}
                 </span>
                 {#if asymmetricOutput}
