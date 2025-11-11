@@ -23,7 +23,7 @@
     }
   }
   
-  type CryptoType = 'keygen' | 'asymmetric' | 'symmetric';
+  type CryptoType = 'keygen' | 'asymmetric' | 'symmetric' | 'hash';
   
   let cryptoType = $state<CryptoType>('keygen');
   
@@ -36,6 +36,8 @@
       cryptoType = 'asymmetric';
     } else if (typeParam === 'symmetric') {
       cryptoType = 'symmetric';
+    } else if (typeParam === 'hash') {
+      cryptoType = 'hash';
     }
   });
   
@@ -89,6 +91,27 @@
   let asymmetricError = $state('');
   let asymmetricCopied = $state(false);
 
+  // Password Hash state
+  type HashAlgorithm = 'PBKDF2' | 'Scrypt' | 'Bcrypt' | 'Argon2';
+  let hashAlgorithm = $state<HashAlgorithm>('PBKDF2');
+  let hashPassword = $state('');
+  let hashSalt = $state('');
+  let hashOutput = $state('');
+  let hashIterations = $state(100000); // PBKDF2
+  let hashKeyLength = $state(32); // bytes
+  let hashCost = $state(14); // Bcrypt cost factor
+  let scryptN = $state(16384); // Scrypt CPU/memory cost
+  let scryptR = $state(8); // Scrypt block size
+  let scryptP = $state(1); // Scrypt parallelization
+  let argon2Memory = $state(65536); // Argon2 memory in KB
+  let argon2Iterations = $state(3); // Argon2 iterations
+  let argon2Parallelism = $state(4); // Argon2 parallelism
+  let isHashing = $state(false);
+  let hashCopied = $state(false);
+  let hashError = $state('');
+  let hashOperation = $state<'hash' | 'verify'>('hash');
+  let hashToVerify = $state('');
+
   let translations = $derived($translationsStore);
 
   function t(key: string): string {
@@ -136,6 +159,209 @@
       desMode = 'CBC'; // Reset DES mode
       tripleDesMode = 'CBC'; // Reset 3DES mode
       rc2Mode = 'CBC'; // Reset RC2 mode
+    }
+    // Reset hash state
+    if (type === 'hash') {
+      hashPassword = '';
+      hashSalt = '';
+      hashOutput = '';
+      hashToVerify = '';
+      hashCopied = false;
+      hashError = '';
+      hashOperation = 'hash';
+    }
+  }
+
+  // Generate random salt
+  function generateSalt(): string {
+    const array = new Uint8Array(16);
+    crypto.getRandomValues(array);
+    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Password Hash functions
+  async function executeHashOperation() {
+    hashError = '';
+    hashOutput = '';
+    
+    if (!hashPassword.trim()) {
+      hashError = t('crypto.hash.passwordRequired');
+      return;
+    }
+    
+    if (hashOperation === 'hash') {
+      await hashPasswordFn();
+    } else {
+      await verifyPasswordFn();
+    }
+  }
+
+  async function hashPasswordFn() {
+    isHashing = true;
+    try {
+      if (!isTauriAvailable || !invokeFn) {
+        hashError = t('crypto.hash.tauriRequired');
+        return;
+      }
+
+      if (hashAlgorithm === 'PBKDF2') {
+        await hashPBKDF2Tauri();
+      } else if (hashAlgorithm === 'Scrypt') {
+        await hashScryptTauri();
+      } else if (hashAlgorithm === 'Bcrypt') {
+        await hashBcryptTauri();
+      } else if (hashAlgorithm === 'Argon2') {
+        await hashArgon2Tauri();
+      }
+    } catch (error) {
+      hashError = `Error: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      isHashing = false;
+    }
+  }
+
+  async function verifyPasswordFn() {
+    isHashing = true;
+    try {
+      if (!isTauriAvailable || !invokeFn) {
+        hashError = t('crypto.hash.tauriRequired');
+        return;
+      }
+
+      if (!hashToVerify.trim()) {
+        hashError = t('crypto.hash.hashRequired');
+        return;
+      }
+      
+      let result;
+      if (hashAlgorithm === 'PBKDF2') {
+        result = await invokeFn('verify_pbkdf2', {
+          request: { password: hashPassword, hash: hashToVerify }
+        });
+      } else if (hashAlgorithm === 'Scrypt') {
+        result = await invokeFn('verify_scrypt', {
+          request: { password: hashPassword, hash: hashToVerify }
+        });
+      } else if (hashAlgorithm === 'Bcrypt') {
+        result = await invokeFn('verify_bcrypt', {
+          request: { password: hashPassword, hash: hashToVerify }
+        });
+      } else if (hashAlgorithm === 'Argon2') {
+        result = await invokeFn('verify_argon2', {
+          request: { password: hashPassword, hash: hashToVerify }
+        });
+      }
+      
+      if (result && result.valid) {
+        hashError = '';
+        hashOutput = t('crypto.hash.verifySuccess');
+      } else {
+        hashError = t('crypto.hash.verifyFailed');
+      }
+    } catch (error) {
+      hashError = `Error: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      isHashing = false;
+    }
+  }
+
+  async function hashPBKDF2Tauri() {
+    if (!invokeFn) return;
+    
+    const result = await invokeFn('hash_pbkdf2', {
+      request: {
+        password: hashPassword,
+        salt: hashSalt || null,
+        algorithm: 'PBKDF2',
+        iterations: hashIterations,
+      }
+    });
+    
+    hashOutput = result.hash;
+    if (!hashSalt) {
+      hashSalt = result.salt;
+    }
+  }
+
+  async function hashScryptTauri() {
+    if (!invokeFn) return;
+    
+    const result = await invokeFn('hash_scrypt', {
+      request: {
+        password: hashPassword,
+        salt: hashSalt || null,
+        algorithm: 'Scrypt',
+        n: scryptN,
+        r: scryptR,
+        p: scryptP,
+      }
+    });
+    
+    hashOutput = result.hash;
+    if (!hashSalt) {
+      hashSalt = result.salt;
+    }
+  }
+
+  async function hashBcryptTauri() {
+    if (!invokeFn) return;
+    
+    const result = await invokeFn('hash_bcrypt', {
+      request: {
+        password: hashPassword,
+        salt: null,
+        algorithm: 'Bcrypt',
+        iterations: hashCost,
+      }
+    });
+    
+    hashOutput = result.hash;
+  }
+
+  async function hashArgon2Tauri() {
+    if (!invokeFn) return;
+    
+    const result = await invokeFn('hash_argon2', {
+      request: {
+        password: hashPassword,
+        salt: hashSalt || null,
+        algorithm: 'Argon2',
+        memory: argon2Memory,
+        argon2_iterations: argon2Iterations,
+        parallelism: argon2Parallelism,
+      }
+    });
+    
+    hashOutput = result.hash;
+    if (!hashSalt) {
+      hashSalt = result.salt;
+    }
+  }
+
+  function generateHashSalt() {
+    hashSalt = generateSalt();
+  }
+
+  function clearHash() {
+    hashPassword = '';
+    hashSalt = '';
+    hashOutput = '';
+    hashToVerify = '';
+    hashError = '';
+    hashCopied = false;
+  }
+
+  async function copyHash() {
+    if (hashOutput) {
+      try {
+        await navigator.clipboard.writeText(hashOutput);
+        hashCopied = true;
+        setTimeout(() => {
+          hashCopied = false;
+        }, 2000);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+      }
     }
   }
 
@@ -1513,6 +1739,17 @@
               <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-600 dark:text-primary-400"></span>
             {/if}
           </button>
+          <button
+            onclick={() => switchCryptoType('hash')}
+            class="px-4 py-2 relative transition-colors font-medium {cryptoType === 'hash'
+              ? 'text-primary-600 dark:text-primary-400'
+              : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+          >
+            {t('crypto.hash.title')}
+            {#if cryptoType === 'hash'}
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-600 dark:text-primary-400"></span>
+            {/if}
+          </button>
         </div>
       </div>
 
@@ -2266,6 +2503,319 @@
               ></textarea>
             </div>
           </div>
+        </div>
+      {:else if cryptoType === 'hash'}
+        <!-- Password Hash -->
+        <div class="flex-1 flex flex-col space-y-4 min-h-0 overflow-y-auto">
+          <!-- Configuration -->
+          <div class="flex-shrink-0 space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label for="hash-algorithm" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                  {t('crypto.hash.algorithm')}
+                </label>
+                <select
+                  id="hash-algorithm"
+                  bind:value={hashAlgorithm}
+                  class="input w-full"
+                >
+                  <option value="PBKDF2">PBKDF2</option>
+                  <option value="Scrypt">Scrypt</option>
+                  <option value="Bcrypt">Bcrypt</option>
+                  <option value="Argon2">Argon2</option>
+                </select>
+              </div>
+
+              <div>
+                <label for="hash-operation" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                  {t('crypto.hash.operation')}
+                </label>
+                <select
+                  id="hash-operation"
+                  bind:value={hashOperation}
+                  class="input w-full"
+                >
+                  <option value="hash">{t('crypto.hash.hash')}</option>
+                  <option value="verify">{t('crypto.hash.verify')}</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Algorithm-specific parameters -->
+            {#if hashAlgorithm === 'PBKDF2'}
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label for="pbkdf2-iterations" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.hash.iterations')}
+                  </label>
+                  <input
+                    type="number"
+                    id="pbkdf2-iterations"
+                    bind:value={hashIterations}
+                    min="1000"
+                    max="1000000"
+                    class="input w-full"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {t('crypto.hash.iterationsHint')}
+                  </p>
+                </div>
+                <div>
+                  <label for="pbkdf2-keylen" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.hash.keyLength')}
+                  </label>
+                  <input
+                    type="number"
+                    id="pbkdf2-keylen"
+                    bind:value={hashKeyLength}
+                    min="16"
+                    max="64"
+                    class="input w-full"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {t('crypto.hash.keyLengthHint')}
+                  </p>
+                </div>
+              </div>
+            {:else if hashAlgorithm === 'Scrypt'}
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label for="scrypt-n" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    N (CPU/Memory)
+                  </label>
+                  <select
+                    id="scrypt-n"
+                    bind:value={scryptN}
+                    class="input w-full"
+                  >
+                    <option value={1024}>1024</option>
+                    <option value={2048}>2048</option>
+                    <option value={4096}>4096</option>
+                    <option value={8192}>8192</option>
+                    <option value={16384}>16384 (推荐)</option>
+                    <option value={32768}>32768</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="scrypt-r" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    r (Block Size)
+                  </label>
+                  <input
+                    type="number"
+                    id="scrypt-r"
+                    bind:value={scryptR}
+                    min="1"
+                    max="16"
+                    class="input w-full"
+                  />
+                </div>
+                <div>
+                  <label for="scrypt-p" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    p (Parallelism)
+                  </label>
+                  <input
+                    type="number"
+                    id="scrypt-p"
+                    bind:value={scryptP}
+                    min="1"
+                    max="8"
+                    class="input w-full"
+                  />
+                </div>
+              </div>
+            {:else if hashAlgorithm === 'Bcrypt'}
+              <div>
+                <label for="bcrypt-cost" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                  {t('crypto.hash.cost')}
+                </label>
+                <input
+                  type="number"
+                  id="bcrypt-cost"
+                  bind:value={hashCost}
+                  min="4"
+                  max="31"
+                  class="input w-full"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {t('crypto.hash.costHint')}
+                </p>
+              </div>
+            {:else if hashAlgorithm === 'Argon2'}
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label for="argon2-memory" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.hash.memory')}
+                  </label>
+                  <input
+                    type="number"
+                    id="argon2-memory"
+                    bind:value={argon2Memory}
+                    min="8192"
+                    max="1048576"
+                    step="1024"
+                    class="input w-full"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {t('crypto.hash.memoryHint')}
+                  </p>
+                </div>
+                <div>
+                  <label for="argon2-iterations" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.hash.iterations')}
+                  </label>
+                  <input
+                    type="number"
+                    id="argon2-iterations"
+                    bind:value={argon2Iterations}
+                    min="1"
+                    max="10"
+                    class="input w-full"
+                  />
+                </div>
+                <div>
+                  <label for="argon2-parallelism" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.hash.parallelism')}
+                  </label>
+                  <input
+                    type="number"
+                    id="argon2-parallelism"
+                    bind:value={argon2Parallelism}
+                    min="1"
+                    max="16"
+                    class="input w-full"
+                  />
+                </div>
+              </div>
+            {/if}
+
+            {#if !isTauriAvailable}
+              <div class="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                <p class="text-sm text-yellow-800 dark:text-yellow-200">
+                  {t('crypto.hash.tauriRequired')}
+                </p>
+              </div>
+            {/if}
+
+            <!-- Password and Salt -->
+            <div class="grid grid-cols-1 gap-4">
+              <div>
+                <label for="hash-password" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                  {t('crypto.hash.password')}
+                </label>
+                <input
+                  type="password"
+                  id="hash-password"
+                  bind:value={hashPassword}
+                  placeholder={t('crypto.hash.passwordPlaceholder')}
+                  class="input w-full"
+                />
+              </div>
+
+              <div>
+                <label for="hash-salt" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                  {t('crypto.hash.salt')}
+                </label>
+                <div class="flex gap-2">
+                  <input
+                    type="text"
+                    id="hash-salt"
+                    bind:value={hashSalt}
+                    placeholder={t('crypto.hash.saltPlaceholder')}
+                    class="input flex-1"
+                  />
+                  <button
+                    onclick={generateHashSalt}
+                    class="btn-secondary whitespace-nowrap"
+                  >
+                    {t('crypto.hash.generateSalt')}
+                  </button>
+                </div>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {t('crypto.hash.saltHint')}
+                </p>
+              </div>
+
+              {#if hashOperation === 'verify'}
+                <div>
+                  <label for="hash-verify" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.hash.hashToVerify')}
+                  </label>
+                  <input
+                    type="text"
+                    id="hash-verify"
+                    bind:value={hashToVerify}
+                    placeholder={t('crypto.hash.hashToVerifyPlaceholder')}
+                    class="input w-full font-mono text-sm"
+                  />
+                </div>
+              {/if}
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex gap-2">
+              <button
+                onclick={executeHashOperation}
+                disabled={isHashing || !isTauriAvailable}
+                class="px-4 py-2 text-white rounded-lg transition-colors font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                style="background-color: #818089;"
+              >
+                {#if isHashing}
+                  {t('crypto.hash.hashing')}
+                {:else}
+                  {hashOperation === 'hash' ? t('crypto.hash.hash') : t('crypto.hash.verify')}
+                {/if}
+              </button>
+              <button
+                onclick={clearHash}
+                disabled={isHashing}
+                class="btn-secondary"
+              >
+                {t('common.clear')}
+              </button>
+            </div>
+
+            {#if hashError}
+              <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                <p class="text-sm text-red-800 dark:text-red-200">
+                  {hashError}
+                </p>
+              </div>
+            {/if}
+          </div>
+
+          <!-- Output -->
+          {#if hashOutput}
+            <div class="flex-shrink-0">
+              <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                  <div class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {t('crypto.hash.output')}
+                  </div>
+                  <button
+                    onclick={copyHash}
+                    class="btn-secondary whitespace-nowrap transition-all duration-200 {hashCopied ? 'bg-green-500 hover:bg-green-600 text-white' : ''}"
+                  >
+                    {#if hashCopied}
+                      <span class="flex items-center gap-1">
+                        <Check class="w-4 h-4" />
+                        {t('common.copied')}
+                      </span>
+                    {:else}
+                      <span class="flex items-center gap-1">
+                        <Copy class="w-4 h-4" />
+                        {t('common.copy')}
+                      </span>
+                    {/if}
+                  </button>
+                </div>
+                <textarea
+                  value={hashOutput}
+                  readonly
+                  class="textarea font-mono text-sm min-h-[100px] {hashCopied ? 'bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700' : ''} transition-colors duration-300"
+                ></textarea>
+              </div>
+            </div>
+          {/if}
         </div>
       {/if}
     </div>

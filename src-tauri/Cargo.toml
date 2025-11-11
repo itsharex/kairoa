@@ -37,4 +37,9 @@ pkcs8 = { version = "0.10", features = ["pem", "alloc"] }
 signature = "2.2"
 sha2 = "0.10"
 hex = "0.4"
+# Password hashing
+pbkdf2 = { version = "0.12", features = ["simple"] }
+scrypt = { version = "0.11", features = ["simple"] }
+bcrypt = "0.15"
+argon2 = "0.5"
 

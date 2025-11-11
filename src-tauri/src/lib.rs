@@ -7,6 +7,18 @@ use pkcs8::{EncodePrivateKey, EncodePublicKey, DecodePrivateKey, DecodePublicKey
 use signature::{Signer, Verifier};
 use sha2::{Sha256, Digest};
 use der::Encode;
+use pbkdf2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Pbkdf2,
+};
+use scrypt::{
+    password_hash::{PasswordHash as ScryptPasswordHash, PasswordHasher as ScryptPasswordHasher, PasswordVerifier as ScryptPasswordVerifier, SaltString as ScryptSaltString},
+    Scrypt,
+};
+use argon2::{
+    password_hash::{PasswordHash as Argon2PasswordHash, PasswordHasher as Argon2PasswordHasher, PasswordVerifier as Argon2PasswordVerifier, SaltString as Argon2SaltString},
+    Argon2, ParamsBuilder,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpRequest {
@@ -304,6 +316,188 @@ fn dsa_verify(public_key_pem: String, message: String, signature: String) -> Res
     })
 }
 
+// Password Hash structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PasswordHashRequest {
+    password: String,
+    salt: Option<String>,
+    algorithm: String,
+    // PBKDF2 params
+    iterations: Option<u32>,
+    // Scrypt params
+    n: Option<u32>,
+    r: Option<u32>,
+    p: Option<u32>,
+    // Argon2 params
+    memory: Option<u32>,
+    argon2_iterations: Option<u32>,
+    parallelism: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PasswordHashResponse {
+    hash: String,
+    salt: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PasswordVerifyRequest {
+    password: String,
+    hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PasswordVerifyResponse {
+    valid: bool,
+}
+
+// PBKDF2 Hash
+#[tauri::command]
+fn hash_pbkdf2(request: PasswordHashRequest) -> Result<PasswordHashResponse, String> {
+    let salt_string = if let Some(salt) = request.salt {
+        SaltString::from_b64(&salt)
+            .map_err(|e| format!("Invalid salt: {}", e))?
+    } else {
+        SaltString::generate(&mut OsRng)
+    };
+    
+    let password_hash = Pbkdf2
+        .hash_password(request.password.as_bytes(), &salt_string)
+        .map_err(|e| format!("Failed to hash password: {}", e))?;
+    
+    Ok(PasswordHashResponse {
+        hash: password_hash.to_string(),
+        salt: salt_string.to_string(),
+    })
+}
+
+// PBKDF2 Verify
+#[tauri::command]
+fn verify_pbkdf2(request: PasswordVerifyRequest) -> Result<PasswordVerifyResponse, String> {
+    let parsed_hash = PasswordHash::new(&request.hash)
+        .map_err(|e| format!("Invalid hash format: {}", e))?;
+    
+    let valid = Pbkdf2
+        .verify_password(request.password.as_bytes(), &parsed_hash)
+        .is_ok();
+    
+    Ok(PasswordVerifyResponse { valid })
+}
+
+// Scrypt Hash
+#[tauri::command]
+fn hash_scrypt(request: PasswordHashRequest) -> Result<PasswordHashResponse, String> {
+    let salt_string = if let Some(salt) = request.salt {
+        ScryptSaltString::from_b64(&salt)
+            .map_err(|e| format!("Invalid salt: {}", e))?
+    } else {
+        ScryptSaltString::generate(&mut OsRng)
+    };
+    
+    let password_hash = Scrypt
+        .hash_password(request.password.as_bytes(), &salt_string)
+        .map_err(|e| format!("Failed to hash password: {}", e))?;
+    
+    Ok(PasswordHashResponse {
+        hash: password_hash.to_string(),
+        salt: salt_string.to_string(),
+    })
+}
+
+// Scrypt Verify
+#[tauri::command]
+fn verify_scrypt(request: PasswordVerifyRequest) -> Result<PasswordVerifyResponse, String> {
+    let parsed_hash = ScryptPasswordHash::new(&request.hash)
+        .map_err(|e| format!("Invalid hash format: {}", e))?;
+    
+    let valid = Scrypt
+        .verify_password(request.password.as_bytes(), &parsed_hash)
+        .is_ok();
+    
+    Ok(PasswordVerifyResponse { valid })
+}
+
+// Bcrypt Hash
+#[tauri::command]
+fn hash_bcrypt(request: PasswordHashRequest) -> Result<PasswordHashResponse, String> {
+    let cost = request.iterations.unwrap_or(12) as u32;
+    
+    let hash = bcrypt::hash(&request.password, cost)
+        .map_err(|e| format!("Failed to hash password: {}", e))?;
+    
+    // Bcrypt hash includes the salt
+    Ok(PasswordHashResponse {
+        hash: hash.clone(),
+        salt: "included_in_hash".to_string(),
+    })
+}
+
+// Bcrypt Verify
+#[tauri::command]
+fn verify_bcrypt(request: PasswordVerifyRequest) -> Result<PasswordVerifyResponse, String> {
+    let valid = bcrypt::verify(&request.password, &request.hash)
+        .map_err(|e| format!("Failed to verify password: {}", e))?;
+    
+    Ok(PasswordVerifyResponse { valid })
+}
+
+// Argon2 Hash
+#[tauri::command]
+fn hash_argon2(request: PasswordHashRequest) -> Result<PasswordHashResponse, String> {
+    let salt_string = if let Some(salt) = request.salt {
+        Argon2SaltString::from_b64(&salt)
+            .map_err(|e| format!("Invalid salt: {}", e))?
+    } else {
+        Argon2SaltString::generate(&mut OsRng)
+    };
+    
+    // Build Argon2 params - use default and customize if needed
+    let params = if request.memory.is_some() || request.argon2_iterations.is_some() || request.parallelism.is_some() {
+        let mut builder = ParamsBuilder::new();
+        if let Some(m) = request.memory {
+            builder.m_cost(m);
+        }
+        if let Some(t) = request.argon2_iterations {
+            builder.t_cost(t);
+        }
+        if let Some(p) = request.parallelism {
+            builder.p_cost(p);
+        }
+        builder.build().map_err(|e| format!("Failed to build params: {}", e))?
+    } else {
+        argon2::Params::default()
+    };
+    
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params,
+    );
+    
+    let password_hash = argon2
+        .hash_password(request.password.as_bytes(), &salt_string)
+        .map_err(|e| format!("Failed to hash password: {}", e))?;
+    
+    Ok(PasswordHashResponse {
+        hash: password_hash.to_string(),
+        salt: salt_string.to_string(),
+    })
+}
+
+// Argon2 Verify
+#[tauri::command]
+fn verify_argon2(request: PasswordVerifyRequest) -> Result<PasswordVerifyResponse, String> {
+    let parsed_hash = Argon2PasswordHash::new(&request.hash)
+        .map_err(|e| format!("Invalid hash format: {}", e))?;
+    
+    let argon2 = Argon2::default();
+    let valid = argon2
+        .verify_password(request.password.as_bytes(), &parsed_hash)
+        .is_ok();
+    
+    Ok(PasswordVerifyResponse { valid })
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -318,7 +512,21 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![greet, http_request, generate_dsa_keypair, dsa_sign, dsa_verify])
+        .invoke_handler(tauri::generate_handler![
+            greet, 
+            http_request, 
+            generate_dsa_keypair, 
+            dsa_sign, 
+            dsa_verify,
+            hash_pbkdf2,
+            verify_pbkdf2,
+            hash_scrypt,
+            verify_scrypt,
+            hash_bcrypt,
+            verify_bcrypt,
+            hash_argon2,
+            verify_argon2
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
