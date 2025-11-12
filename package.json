@@ -25,6 +25,7 @@
     "lucide-svelte": "^0.552.0",
     "marked": "^16.4.1",
     "mermaid": "^11.12.1",
+    "sm-crypto-v2": "^1.15.0",
     "svelte-i18n": "^4.0.1"
   },
   "devDependencies": {

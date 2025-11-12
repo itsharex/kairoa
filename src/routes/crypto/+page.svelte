@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import CryptoJS from 'crypto-js';
   import { browser } from '$app/environment';
+  import { sm2, sm3, sm4 } from 'sm-crypto-v2';
   
   // 动态导入 Tauri API
   let invokeFn: ((cmd: string, args?: any) => Promise<any>) | null = $state(null);
@@ -42,7 +43,7 @@
   });
   
   // Key Generator state
-  type KeyGenAlgorithm = 'RSA' | 'DSA' | 'ECDSA' | 'ECDH';
+  type KeyGenAlgorithm = 'RSA' | 'DSA' | 'ECDSA' | 'ECDH' | 'SM2';
   type KeySize = 1024 | 2048 | 3072 | 4096;
   type DsaKeySize = 1024 | 2048 | 3072;
   type KeyFormat = 'pem' | 'der';
@@ -61,13 +62,14 @@
   let keyGenError = $state('');
   
   // Symmetric algorithm state
-  type SymmetricAlgorithm = 'AES' | 'DES' | '3DES' | 'Rabbit' | 'RC2' | 'RC4';
+  type SymmetricAlgorithm = 'AES' | 'DES' | '3DES' | 'Rabbit' | 'RC2' | 'RC4' | 'SM4';
   type BlockCipherMode = 'ECB' | 'CBC' | 'CFB' | 'OFB' | 'CTR' | 'GCM';
   let symmetricAlgorithm = $state<SymmetricAlgorithm>('AES');
   let aesMode = $state<BlockCipherMode>('GCM'); // Mode for AES
   let desMode = $state<BlockCipherMode>('CBC'); // Mode for DES
   let tripleDesMode = $state<BlockCipherMode>('CBC'); // Mode for 3DES
   let rc2Mode = $state<BlockCipherMode>('CBC'); // Mode for RC2
+  let sm4Mode = $state<BlockCipherMode>('CBC'); // Mode for SM4
   let symmetricKey = $state('');
   let symmetricInput = $state('');
   let symmetricOutput = $state('');
@@ -77,7 +79,7 @@
   let symmetricError = $state('');
   
   // Asymmetric algorithm state
-  type AsymmetricAlgorithm = 'RSA-OAEP' | 'RSA-PSS' | 'ECDSA' | 'ECDH' | 'DSA';
+  type AsymmetricAlgorithm = 'RSA-OAEP' | 'RSA-PSS' | 'ECDSA' | 'ECDH' | 'DSA' | 'SM2';
   type AsymmetricOperation = 'encrypt' | 'decrypt' | 'sign' | 'verify' | 'keyExchange';
   type NamedCurve = 'P-256' | 'P-384' | 'P-521';
   let asymmetricAlgorithm = $state<AsymmetricAlgorithm>('RSA-OAEP');
@@ -92,7 +94,7 @@
   let asymmetricCopied = $state(false);
 
   // Password Hash state
-  type HashAlgorithm = 'PBKDF2' | 'Scrypt' | 'Bcrypt' | 'Argon2';
+  type HashAlgorithm = 'PBKDF2' | 'Scrypt' | 'Bcrypt' | 'Argon2' | 'SM3';
   let hashAlgorithm = $state<HashAlgorithm>('PBKDF2');
   let hashPassword = $state('');
   let hashSalt = $state('');
@@ -199,12 +201,16 @@
   async function hashPasswordFn() {
     isHashing = true;
     try {
-      if (!isTauriAvailable || !invokeFn) {
+      if (hashAlgorithm === 'SM3') {
+        if (!hashPassword.trim()) {
+          hashError = t('crypto.hash.passwordRequired');
+          return;
+        }
+        hashOutput = sm3(hashPassword);
+      } else if (!isTauriAvailable || !invokeFn) {
         hashError = t('crypto.hash.tauriRequired');
         return;
-      }
-
-      if (hashAlgorithm === 'PBKDF2') {
+      } else if (hashAlgorithm === 'PBKDF2') {
         await hashPBKDF2Tauri();
       } else if (hashAlgorithm === 'Scrypt') {
         await hashScryptTauri();
@@ -223,40 +229,53 @@
   async function verifyPasswordFn() {
     isHashing = true;
     try {
-      if (!isTauriAvailable || !invokeFn) {
+      if (hashAlgorithm === 'SM3') {
+        if (!hashPassword.trim()) {
+          hashError = t('crypto.hash.passwordRequired');
+          return;
+        }
+        if (!hashToVerify.trim()) {
+          hashError = t('crypto.hash.hashRequired');
+          return;
+        }
+        const computedHash = sm3(hashPassword);
+        if (computedHash.toLowerCase() === hashToVerify.toLowerCase()) {
+          hashOutput = t('crypto.hash.verifySuccess');
+        } else {
+          hashError = t('crypto.hash.verifyFailed');
+        }
+      } else if (!isTauriAvailable || !invokeFn) {
         hashError = t('crypto.hash.tauriRequired');
         return;
-      }
-
-      if (!hashToVerify.trim()) {
+      } else if (!hashToVerify.trim()) {
         hashError = t('crypto.hash.hashRequired');
         return;
-      }
-      
-      let result;
-      if (hashAlgorithm === 'PBKDF2') {
-        result = await invokeFn('verify_pbkdf2', {
-          request: { password: hashPassword, hash: hashToVerify }
-        });
-      } else if (hashAlgorithm === 'Scrypt') {
-        result = await invokeFn('verify_scrypt', {
-          request: { password: hashPassword, hash: hashToVerify }
-        });
-      } else if (hashAlgorithm === 'Bcrypt') {
-        result = await invokeFn('verify_bcrypt', {
-          request: { password: hashPassword, hash: hashToVerify }
-        });
-      } else if (hashAlgorithm === 'Argon2') {
-        result = await invokeFn('verify_argon2', {
-          request: { password: hashPassword, hash: hashToVerify }
-        });
-      }
-      
-      if (result && result.valid) {
-        hashError = '';
-        hashOutput = t('crypto.hash.verifySuccess');
       } else {
-        hashError = t('crypto.hash.verifyFailed');
+        let result;
+        if (hashAlgorithm === 'PBKDF2') {
+          result = await invokeFn('verify_pbkdf2', {
+            request: { password: hashPassword, hash: hashToVerify }
+          });
+        } else if (hashAlgorithm === 'Scrypt') {
+          result = await invokeFn('verify_scrypt', {
+            request: { password: hashPassword, hash: hashToVerify }
+          });
+        } else if (hashAlgorithm === 'Bcrypt') {
+          result = await invokeFn('verify_bcrypt', {
+            request: { password: hashPassword, hash: hashToVerify }
+          });
+        } else if (hashAlgorithm === 'Argon2') {
+          result = await invokeFn('verify_argon2', {
+            request: { password: hashPassword, hash: hashToVerify }
+          });
+        }
+        
+        if (result && result.valid) {
+          hashError = '';
+          hashOutput = t('crypto.hash.verifySuccess');
+        } else {
+          hashError = t('crypto.hash.verifyFailed');
+        }
       }
     } catch (error) {
       hashError = `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -456,6 +475,8 @@
         await generateECDSAKeyPair();
       } else if (keyGenAlgorithm === 'ECDH') {
         await generateECDHKeyPair();
+      } else if (keyGenAlgorithm === 'SM2') {
+        generateSM2KeyPair();
       }
     } catch (error) {
       console.error('Error generating key pair:', error);
@@ -518,6 +539,13 @@
     );
     publicKey = await exportPublicKey(keyPair.publicKey, keyFormat);
     privateKey = await exportPrivateKey(keyPair.privateKey, keyFormat);
+  }
+
+  function generateSM2KeyPair() {
+    const keyPair = sm2.generateKeyPairHex();
+    // SM2 keys are in hex format, convert to PEM-like format for consistency
+    publicKey = keyPair.publicKey;
+    privateKey = keyPair.privateKey;
   }
 
   async function copyToClipboard(text: string, type: 'public' | 'private') {
@@ -1031,6 +1059,108 @@
     }
   }
   
+  // SM2 Encrypt
+  function encryptSM2() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPublicKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.publicKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      const encrypted = sm2.doEncrypt(asymmetricInput, asymmetricPublicKey);
+      asymmetricOutput = encrypted;
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+  
+  // SM2 Decrypt
+  function decryptSM2() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPrivateKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.privateKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      const decrypted = sm2.doDecrypt(asymmetricInput, asymmetricPrivateKey);
+      asymmetricOutput = decrypted;
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Invalid encrypted data or key'}`;
+    }
+  }
+  
+  // SM2 Sign
+  function signSM2() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPrivateKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.privateKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      const signature = sm2.doSignature(asymmetricInput, asymmetricPrivateKey);
+      asymmetricOutput = signature;
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+  
+  // SM2 Verify
+  function verifySM2() {
+    asymmetricError = '';
+    asymmetricOutput = '';
+    
+    if (!asymmetricPublicKey.trim()) {
+      asymmetricError = t('crypto.asymmetric.publicKeyRequired');
+      return;
+    }
+    
+    if (!asymmetricInput.trim()) {
+      asymmetricError = t('crypto.asymmetric.inputRequired');
+      return;
+    }
+    
+    try {
+      // Parse message|signature format
+      const parts = asymmetricInput.split('|');
+      if (parts.length !== 2) {
+        asymmetricError = t('crypto.asymmetric.invalidFormat');
+        return;
+      }
+      
+      const message = parts[0];
+      const signature = parts[1];
+      
+      const isValid = sm2.doVerifySignature(message, signature, asymmetricPublicKey);
+      asymmetricOutput = isValid ? t('crypto.asymmetric.verifySuccess') : t('crypto.asymmetric.verifyFailed');
+    } catch (error) {
+      asymmetricError = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+
   // Execute asymmetric operation
   async function executeAsymmetricOperation() {
     if (asymmetricAlgorithm === 'RSA-OAEP') {
@@ -1060,6 +1190,16 @@
         await signDSA();
       } else if (asymmetricOperation === 'verify') {
         await verifyDSA();
+      }
+    } else if (asymmetricAlgorithm === 'SM2') {
+      if (asymmetricOperation === 'encrypt') {
+        encryptSM2();
+      } else if (asymmetricOperation === 'decrypt') {
+        decryptSM2();
+      } else if (asymmetricOperation === 'sign') {
+        signSM2();
+      } else if (asymmetricOperation === 'verify') {
+        verifySM2();
       }
     }
   }
@@ -1149,6 +1289,10 @@
     if (algorithm === 'RC2') {
       return rc2Mode !== 'ECB';
     }
+    // SM4 depends on selected mode
+    if (algorithm === 'SM4') {
+      return sm4Mode !== 'ECB';
+    }
     // Rabbit always requires IV (8 bytes)
     return true;
   }
@@ -1179,6 +1323,14 @@
         return 8;
       case 'RC4':
         return 0;
+      case 'SM4':
+        if (sm4Mode === 'ECB') {
+          return 0;
+        } else if (sm4Mode === 'GCM') {
+          return 12;
+        } else {
+          return 16; // CBC, CFB, OFB, CTR
+        }
       default:
         return 16;
     }
@@ -1188,6 +1340,10 @@
   // Web Crypto API only supports AES-GCM, AES-CBC, AES-CTR
   function usesWebCryptoAPI(algorithm: SymmetricAlgorithm): boolean {
     return algorithm === 'AES' && (aesMode === 'GCM' || aesMode === 'CBC' || aesMode === 'CTR');
+  }
+
+  function usesSM4(algorithm: SymmetricAlgorithm): boolean {
+    return algorithm === 'SM4';
   }
   
   // Get AES algorithm name for Web Crypto API
@@ -1210,6 +1366,8 @@
         return []; // Variable length 1-128 bytes
       case 'RC4':
         return []; // Variable length 1-256 bytes
+      case 'SM4':
+        return [16]; // SM4 uses 128-bit (16 bytes) key
       default:
         return [];
     }
@@ -1233,6 +1391,8 @@
         return `${algorithmName}: 1-128 bytes (8-1024 bits)`;
       case 'RC4':
         return `${algorithmName}: 1-256 bytes (8-2048 bits)`;
+      case 'SM4':
+        return `${algorithmName}: 16 bytes (128 bits)`;
       default:
         return '';
     }
@@ -1253,6 +1413,8 @@
         return 'Rabbit';
       case 'RC4':
         return 'RC4';
+      case 'SM4':
+        return `SM4-${sm4Mode}`;
       default:
         return symmetricAlgorithm;
     }
@@ -1274,8 +1436,70 @@
     }
     
     try {
-      // Use Web Crypto API for AES
-      if (usesWebCryptoAPI(symmetricAlgorithm)) {
+      // Use SM4 for SM4 algorithm
+      if (usesSM4(symmetricAlgorithm)) {
+        const keyBuffer = textToArrayBuffer(symmetricKey);
+        const keyLength = keyBuffer.byteLength;
+        const validLengths = getValidKeyLengths(symmetricAlgorithm);
+        if (!validLengths.includes(keyLength)) {
+          const algorithmName = getAlgorithmDisplayName();
+          const expectedLengths = getKeyLengthDescription(symmetricAlgorithm);
+          symmetricError = t('crypto.symmetric.invalidKeyLength') + ` (${algorithmName}: Current: ${keyLength} bytes, Expected: ${expectedLengths})`;
+          return;
+        }
+        
+        // Convert key to hex string
+        const keyHex = arrayBufferToHex(keyBuffer);
+        
+        // Prepare IV
+        let ivHex: string | undefined;
+        if (symmetricIv.trim()) {
+          const ivText = symmetricIv.trim();
+          if (isValidHex(ivText)) {
+            ivHex = ivText;
+          } else {
+            const ivBuffer = textToArrayBuffer(ivText);
+            ivHex = arrayBufferToHex(ivBuffer);
+          }
+          const ivLength = ivHex.length / 2;
+          const expectedIvLength = getIVLength(symmetricAlgorithm);
+          if (ivLength !== expectedIvLength) {
+            symmetricError = t('crypto.symmetric.invalidIvLength') + ` (Current: ${ivLength} bytes, Expected: ${expectedIvLength} bytes)`;
+            return;
+          }
+        } else {
+          // Generate random IV
+          const ivLength = getIVLength(symmetricAlgorithm);
+          const ivBytes = crypto.getRandomValues(new Uint8Array(ivLength));
+          ivHex = arrayBufferToHex(ivBytes.buffer);
+          symmetricIv = ivHex;
+        }
+        
+        // Convert input to hex
+        const inputHex = arrayBufferToHex(new TextEncoder().encode(symmetricInput));
+        
+        // SM4 encryption
+        const mode = sm4Mode.toLowerCase() as 'cbc' | 'ecb' | 'gcm';
+        const options: any = {
+          mode: mode,
+          output: 'hex'
+        };
+        
+        if (mode !== 'ecb' && ivHex) {
+          options.iv = hexToArrayBuffer(ivHex);
+        }
+        
+        const encrypted = sm4.encrypt(inputHex, keyHex, 1, options);
+        
+        if (mode === 'gcm' && typeof encrypted === 'object' && 'output' in encrypted) {
+          symmetricOutput = encrypted.output as string;
+          if (encrypted.tag) {
+            symmetricOutput += '|' + (typeof encrypted.tag === 'string' ? encrypted.tag : arrayBufferToHex(encrypted.tag.buffer));
+          }
+        } else {
+          symmetricOutput = encrypted as string;
+        }
+      } else if (usesWebCryptoAPI(symmetricAlgorithm)) {
         const keyBuffer = textToArrayBuffer(symmetricKey);
         const keyLength = keyBuffer.byteLength;
         const validLengths = getValidKeyLengths(symmetricAlgorithm);
@@ -1496,8 +1720,80 @@
     }
     
     try {
-      // Use Web Crypto API for AES
-      if (usesWebCryptoAPI(symmetricAlgorithm)) {
+      // Use SM4 for SM4 algorithm
+      if (usesSM4(symmetricAlgorithm)) {
+        const keyBuffer = textToArrayBuffer(symmetricKey);
+        const keyLength = keyBuffer.byteLength;
+        const validLengths = getValidKeyLengths(symmetricAlgorithm);
+        if (!validLengths.includes(keyLength)) {
+          const algorithmName = getAlgorithmDisplayName();
+          const expectedLengths = getKeyLengthDescription(symmetricAlgorithm);
+          symmetricError = t('crypto.symmetric.invalidKeyLength') + ` (${algorithmName}: Current: ${keyLength} bytes, Expected: ${expectedLengths})`;
+          return;
+        }
+        
+        // Convert key to hex string
+        const keyHex = arrayBufferToHex(keyBuffer);
+        
+        // Prepare IV
+        let ivHex: string | undefined;
+        if (symmetricIv.trim()) {
+          const ivText = symmetricIv.trim();
+          if (isValidHex(ivText)) {
+            ivHex = ivText;
+          } else {
+            const ivBuffer = textToArrayBuffer(ivText);
+            ivHex = arrayBufferToHex(ivBuffer);
+          }
+          const ivLength = ivHex.length / 2;
+          const expectedIvLength = getIVLength(symmetricAlgorithm);
+          if (ivLength !== expectedIvLength) {
+            symmetricError = t('crypto.symmetric.invalidIvLength') + ` (Current: ${ivLength} bytes, Expected: ${expectedIvLength} bytes)`;
+            return;
+          }
+        } else if (sm4Mode !== 'ECB') {
+          const expectedIvLength = getIVLength(symmetricAlgorithm);
+          symmetricError = t('crypto.symmetric.ivRequired') + ` (Required: ${expectedIvLength} bytes)`;
+          return;
+        }
+        
+        // Parse input (hex string)
+        let inputHex = symmetricInput.trim();
+        let tagHex: string | undefined;
+        
+        // Check if input contains tag (for GCM mode)
+        if (sm4Mode === 'GCM' && inputHex.includes('|')) {
+          const parts = inputHex.split('|');
+          inputHex = parts[0];
+          tagHex = parts[1];
+        }
+        
+        // SM4 decryption
+        const mode = sm4Mode.toLowerCase() as 'cbc' | 'ecb' | 'gcm';
+        const options: any = {
+          mode: mode,
+          output: 'hex'
+        };
+        
+        if (mode !== 'ecb' && ivHex) {
+          options.iv = hexToArrayBuffer(ivHex);
+        }
+        
+        if (mode === 'gcm' && tagHex) {
+          options.tag = hexToArrayBuffer(tagHex);
+        }
+        
+        const decrypted = sm4.decrypt(inputHex, keyHex, 0, options);
+        const decryptedHex = typeof decrypted === 'string' ? decrypted : arrayBufferToHex(decrypted.buffer);
+        
+        // Convert hex to text
+        try {
+          const decryptedBytes = hexToArrayBuffer(decryptedHex);
+          symmetricOutput = new TextDecoder().decode(decryptedBytes);
+        } catch (e) {
+          symmetricError = `Error: ${e instanceof Error ? e.message : 'Failed to decode decrypted data'}`;
+        }
+      } else if (usesWebCryptoAPI(symmetricAlgorithm)) {
         const keyBuffer = textToArrayBuffer(symmetricKey);
         const keyLength = keyBuffer.byteLength;
         const validLengths = getValidKeyLengths(symmetricAlgorithm);
@@ -1773,6 +2069,7 @@
                     <option value="DSA">DSA</option>
                     <option value="ECDSA">ECDSA</option>
                     <option value="ECDH">ECDH</option>
+                    <option value="SM2">SM2 (国密)</option>
                   </select>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                     {#if keyGenAlgorithm === 'RSA'}
@@ -1783,6 +2080,8 @@
                       {t('keyGenerator.ecdsaDescription')}
                     {:else if keyGenAlgorithm === 'ECDH'}
                       {t('keyGenerator.ecdhDescription')}
+                    {:else if keyGenAlgorithm === 'SM2'}
+                      {t('keyGenerator.sm2Description')}
                     {/if}
                   </p>
                 </div>
@@ -1998,6 +2297,7 @@
               <option value="ECDSA">ECDSA (Sign/Verify)</option>
               <option value="ECDH">ECDH (Key Exchange)</option>
               <option value="DSA">DSA (Sign/Verify)</option>
+              <option value="SM2">SM2 (国密 - Encryption/Decryption/Sign/Verify)</option>
             </select>
           </div>
 
@@ -2038,6 +2338,11 @@
               {:else if asymmetricAlgorithm === 'ECDH'}
                 <option value="keyExchange">{t('crypto.asymmetric.keyExchange')}</option>
               {:else if asymmetricAlgorithm === 'DSA'}
+                <option value="sign">{t('crypto.asymmetric.sign')}</option>
+                <option value="verify">{t('crypto.asymmetric.verify')}</option>
+              {:else if asymmetricAlgorithm === 'SM2'}
+                <option value="encrypt">{t('crypto.asymmetric.encrypt')}</option>
+                <option value="decrypt">{t('crypto.asymmetric.decrypt')}</option>
                 <option value="sign">{t('crypto.asymmetric.sign')}</option>
                 <option value="verify">{t('crypto.asymmetric.verify')}</option>
               {/if}
@@ -2098,6 +2403,34 @@
                     id="asymmetric-public-key"
                     bind:value={asymmetricPublicKey}
                     placeholder={t('crypto.asymmetric.publicKeyPlaceholder')}
+                    class="textarea font-mono text-sm min-h-[120px]"
+                  ></textarea>
+                </div>
+              {/if}
+            {:else if asymmetricAlgorithm === 'SM2'}
+              {#if asymmetricOperation === 'encrypt' || asymmetricOperation === 'verify'}
+                <!-- Public key for encryption or verification -->
+                <div class="col-span-2">
+                  <label for="asymmetric-public-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.asymmetric.publicKey')}
+                  </label>
+                  <textarea
+                    id="asymmetric-public-key"
+                    bind:value={asymmetricPublicKey}
+                    placeholder="Enter SM2 public key (hex format)..."
+                    class="textarea font-mono text-sm min-h-[120px]"
+                  ></textarea>
+                </div>
+              {:else}
+                <!-- Private key for decryption or signing -->
+                <div class="col-span-2">
+                  <label for="asymmetric-private-key" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                    {t('crypto.asymmetric.privateKey')}
+                  </label>
+                  <textarea
+                    id="asymmetric-private-key"
+                    bind:value={asymmetricPrivateKey}
+                    placeholder="Enter SM2 private key (hex format)..."
                     class="textarea font-mono text-sm min-h-[120px]"
                   ></textarea>
                 </div>
@@ -2188,6 +2521,11 @@
                 {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.encrypt') : t('crypto.asymmetric.decrypt')}
               {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA'}
                 {asymmetricOperation === 'sign' ? t('crypto.asymmetric.sign') : t('crypto.asymmetric.verify')}
+              {:else if asymmetricAlgorithm === 'SM2'}
+                {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.encrypt') 
+                  : asymmetricOperation === 'decrypt' ? t('crypto.asymmetric.decrypt')
+                  : asymmetricOperation === 'sign' ? t('crypto.asymmetric.sign')
+                  : t('crypto.asymmetric.verify')}
               {:else if asymmetricAlgorithm === 'ECDH'}
                 {t('crypto.asymmetric.keyExchange')}
               {/if}
@@ -2215,6 +2553,11 @@
                 <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   {#if asymmetricAlgorithm === 'RSA-OAEP'}
                     {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.plaintext') : t('crypto.asymmetric.ciphertext')}
+                  {:else if asymmetricAlgorithm === 'SM2'}
+                    {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.plaintext')
+                      : asymmetricOperation === 'decrypt' ? t('crypto.asymmetric.ciphertext')
+                      : asymmetricOperation === 'sign' ? t('crypto.asymmetric.message')
+                      : t('crypto.asymmetric.messageAndSignature')}
                   {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA'}
                     {asymmetricOperation === 'sign' ? t('crypto.asymmetric.message') : t('crypto.asymmetric.messageAndSignature')}
                   {:else if asymmetricAlgorithm === 'ECDH'}
@@ -2227,7 +2570,7 @@
                 bind:value={asymmetricInput}
                 placeholder={asymmetricAlgorithm === 'ECDH'
                   ? t('crypto.asymmetric.notApplicable')
-                  : (asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA') && asymmetricOperation === 'verify' 
+                  : ((asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA' || asymmetricAlgorithm === 'SM2') && asymmetricOperation === 'verify')
                     ? t('crypto.asymmetric.messageAndSignaturePlaceholder')
                     : t('crypto.asymmetric.inputPlaceholder')}
                 class="textarea font-mono text-sm flex-1 resize-none"
@@ -2241,6 +2584,11 @@
                 <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   {#if asymmetricAlgorithm === 'RSA-OAEP'}
                     {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.ciphertext') : t('crypto.asymmetric.plaintext')}
+                  {:else if asymmetricAlgorithm === 'SM2'}
+                    {asymmetricOperation === 'encrypt' ? t('crypto.asymmetric.ciphertext')
+                      : asymmetricOperation === 'decrypt' ? t('crypto.asymmetric.plaintext')
+                      : asymmetricOperation === 'sign' ? t('crypto.asymmetric.signature')
+                      : t('crypto.asymmetric.verificationResult')}
                   {:else if asymmetricAlgorithm === 'RSA-PSS' || asymmetricAlgorithm === 'ECDSA' || asymmetricAlgorithm === 'DSA'}
                     {asymmetricOperation === 'sign' ? t('crypto.asymmetric.signature') : t('crypto.asymmetric.verificationResult')}
                   {:else if asymmetricAlgorithm === 'ECDH'}
@@ -2296,6 +2644,7 @@
               <option value="Rabbit">Rabbit</option>
               <option value="RC2">RC2</option>
               <option value="RC4">RC4</option>
+              <option value="SM4">SM4 (国密)</option>
             </select>
           </div>
           
@@ -2373,6 +2722,24 @@
                 <option value="CBC">CBC</option>
                 <option value="CFB">CFB</option>
                 <option value="OFB">OFB</option>
+              </select>
+            </div>
+          {/if}
+          
+          <!-- Mode selection for SM4 -->
+          {#if symmetricAlgorithm === 'SM4'}
+            <div class="flex-shrink-0">
+              <label for="sm4-mode" class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                {t('crypto.symmetric.mode')}
+              </label>
+              <select
+                id="sm4-mode"
+                bind:value={sm4Mode}
+                class="input w-full"
+              >
+                <option value="ECB">ECB</option>
+                <option value="CBC">CBC</option>
+                <option value="GCM">GCM</option>
               </select>
             </div>
           {/if}
@@ -2522,6 +2889,7 @@
                   <option value="PBKDF2">PBKDF2</option>
                   <option value="Scrypt">Scrypt</option>
                   <option value="Bcrypt">Bcrypt</option>
+                  <option value="SM3">SM3 (国密)</option>
                   <option value="Argon2">Argon2</option>
                 </select>
               </div>
