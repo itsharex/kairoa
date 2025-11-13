@@ -26,7 +26,8 @@ const translations = {
       previewerDesc: 'Preview SVG, Markdown, and Mermaid diagrams',
       imageToolsDesc: 'Rotate and scale images',
       colorDesc: 'Convert between color formats (HEX, RGB, HSL)',
-      baseConverterDesc: 'Convert between number bases (binary, octal, decimal, hex)'
+      baseConverterDesc: 'Convert between number bases (binary, octal, decimal, hex)',
+      qrCodeDesc: 'Generate QR codes from text or URLs'
     },
     nav: {
       hash: 'Hash Calculator',
@@ -45,6 +46,7 @@ const translations = {
       previewer: 'Previewer',
       apiClient: 'REST API Client',
       imageTools: 'Image Tools',
+      qrCode: 'QR Code Generator',
       settings: 'Settings'
     },
     imageTools: {
@@ -573,6 +575,35 @@ const translations = {
       close: 'Close',
       showCode: 'Show code',
       clearAll: 'Clear all'
+    },
+    qrCode: {
+      title: 'QR Code Generator',
+      input: 'Input',
+      inputPlaceholder: 'Enter text or URL to generate QR code...',
+      inputRequired: 'Please enter text or URL',
+      generate: 'Generate',
+      generating: 'Generating...',
+      size: 'Size',
+      margin: 'Margin',
+      colorDark: 'Dark Color',
+      colorLight: 'Light Color',
+      errorCorrectionLevel: 'Error Correction Level',
+      errorCorrectionL: 'Low',
+      errorCorrectionM: 'Medium',
+      errorCorrectionQ: 'Quartile',
+      errorCorrectionH: 'High',
+      copy: 'Copy',
+      copied: 'Copied',
+      download: 'Download',
+      clear: 'Clear',
+      logo: 'Logo',
+      selectLogo: 'Select Logo',
+      removeLogo: 'Remove',
+      logoSize: 'Logo Size (%)',
+      invalidLogoType: 'Please select a valid image file',
+      saveSuccess: '✓ QR code saved successfully',
+      saveFailed: 'Failed to save QR code',
+      downloadStarted: '✓ Download started'
     }
   },
   zh: {
@@ -616,6 +647,7 @@ const translations = {
       previewer: '预览器',
       apiClient: 'REST API 客户端',
       imageTools: '图片处理',
+      qrCode: '二维码生成器',
       settings: '设置'
     },
     imageTools: {
@@ -1144,6 +1176,35 @@ const translations = {
       close: '关闭',
       showCode: '显示代码',
       clearAll: '清除全部'
+    },
+    qrCode: {
+      title: '二维码生成器',
+      input: '输入',
+      inputPlaceholder: '输入文本或 URL 生成二维码...',
+      inputRequired: '请输入文本或 URL',
+      generate: '生成',
+      generating: '生成中...',
+      size: '尺寸',
+      margin: '边距',
+      colorDark: '深色',
+      colorLight: '浅色',
+      errorCorrectionLevel: '纠错级别',
+      errorCorrectionL: '低',
+      errorCorrectionM: '中',
+      errorCorrectionQ: '四分位',
+      errorCorrectionH: '高',
+      copy: '复制',
+      copied: '已复制',
+      download: '下载',
+      clear: '清空',
+      logo: 'Logo',
+      selectLogo: '选择 Logo',
+      removeLogo: '移除',
+      logoSize: 'Logo 大小 (%)',
+      invalidLogoType: '请选择有效的图片文件',
+      saveSuccess: '✓ 二维码保存成功',
+      saveFailed: '保存二维码失败',
+      downloadStarted: '✓ 下载已开始'
     }
   }
 };
